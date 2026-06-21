@@ -1,0 +1,15 @@
+node_modules
+dist
+build
+coverage
+.git
+.github
+.DS_Store
+*.log
+*.tmp
+*.temp
+tmp
+temp
+.cache
+storage/*.db
+storage/*.backup

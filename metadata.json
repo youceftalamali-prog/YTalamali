@@ -1,0 +1,8 @@
+{
+  "name": "AuraPost AI",
+  "description": "Multi-platform DTC and marketplace product import suite with high-fidelity validation, multi-tenant isolation, and credit accounting.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

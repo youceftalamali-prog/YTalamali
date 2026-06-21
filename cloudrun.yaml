@@ -1,0 +1,27 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: aurapost-ai
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "10"
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 300
+      containers:
+        - image: REGION-docker.pkg.dev/PROJECT_ID/aurapost-ai/aurapost-ai:latest
+          ports:
+            - name: http1
+              containerPort: 8080
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: "8080"
+          resources:
+            limits:
+              cpu: "1"
+              memory: 1Gi
