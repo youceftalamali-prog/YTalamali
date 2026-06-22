@@ -713,6 +713,7 @@ async function startServer() {
       customPrompt,
       rawHtml,
       operationId: op.id,
+      extractor: providerName, // store extractor name in payload for logging
     }, {
       workerName: "import-worker",
       priority: 10,
@@ -725,6 +726,50 @@ async function startServer() {
       operation: op,
       queueJob,
       message: `Queued ${providerName} import for background processing.`,
+    });
+  });
+
+  // 5b. Get import operation status
+  app.get("/api/import/status/:operationId", (req, res) => {
+    const workspaceId = (req.query.workspaceId as string) || "default-workspace";
+    const operationId = req.params.operationId;
+    const ops = db.getImportOperations(workspaceId);
+    const op = ops.find((o) => o.id === operationId);
+    if (!op) {
+      return res.status(404).json({ error: "Operation not found." });
+    }
+    // Get product if exists
+    let product = null;
+    if (op.productId) {
+      const products = db.getProducts(workspaceId);
+      product = products.find((p) => p.id === op.productId) || null;
+    }
+    // Get attempt count from queue logs
+    const logs = db.getQueueJobLogs(workspaceId);
+    const jobLogs = logs.filter((log) => log.message.includes(operationId));
+    const attemptCount = jobLogs.filter((log) => log.status === "processing" || log.status === "retrying" || log.status === "failed").length + 1;
+    // Get extractor name from the operation (provider) or from queue job payload
+    let extractor = op.provider || "Unknown";
+    // try to get from queue job payload if not in operation
+    if (!extractor || extractor === "Unknown") {
+      const jobs = db.getQueueJobs(workspaceId, { includeCompleted: true });
+      const job = jobs.find((j) => j.referenceId === operationId);
+      if (job && job.payload && typeof job.payload === "object" && "extractor" in job.payload) {
+        extractor = String(job.payload.extractor);
+      }
+    }
+
+    return res.json({
+      id: op.id,
+      status: op.status,
+      provider: op.provider,
+      sourceUrl: op.sourceUrl,
+      errorMessage: op.errorMessage || null,
+      product,
+      creditCharged: op.creditCharged,
+      createdAt: op.createdAt,
+      attemptCount,
+      extractor,
     });
   });
 
