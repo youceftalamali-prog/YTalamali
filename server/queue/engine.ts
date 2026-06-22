@@ -263,6 +263,13 @@ export class QueueEngine {
         this.db.addQueueJobLog(job.workspaceId, job.id, workerName, "retrying", `Retrying in ${nextBackoff}ms: ${message}`);
       } else {
         this.db.moveQueueJobToDeadLetter(job.id, message);
+        // Also update import operation with failure reason and extractor
+        if (job.kind === "product_import" && job.payload && typeof job.payload === "object" && "operationId" in job.payload) {
+          const opId = String(job.payload.operationId);
+          const extractorName = (job.payload as any).extractor || "Unknown";
+          const fullError = `[${extractorName}] ${message}`;
+          this.db.completeImportFailure(opId, job.workspaceId, fullError);
+        }
       }
 
       this.persistWorker(workerName, {
@@ -308,13 +315,15 @@ export class QueueEngine {
   }
 
   private async handleProductImport(job: QueueJobRecord): Promise<void> {
-    const { url, customPrompt, rawHtml, operationId } = job.payload as {
+    const { url, customPrompt, rawHtml, operationId, extractor: extractorName } = job.payload as {
       url: string;
       customPrompt?: string;
       rawHtml?: string;
       operationId: string;
+      extractor?: string;
     };
     const extractor = ExtractorFactory.getExtractor(url);
+    const provider = extractor.providerName;
     try {
       const extractedProduct = await extractor.extract(url, rawHtml, customPrompt);
       const { isValid, errors } = extractor.validate(extractedProduct);
@@ -323,7 +332,8 @@ export class QueueEngine {
       }
       this.db.completeImportSuccess(operationId, job.workspaceId, extractedProduct);
     } catch (error: any) {
-      this.db.completeImportFailure(operationId, job.workspaceId, error.message || "Unknown extraction error");
+      const errorMsg = `[${provider}] ${error.message || "Unknown extraction error"}`;
+      this.db.completeImportFailure(operationId, job.workspaceId, errorMsg);
       throw error;
     }
   }
@@ -349,169 +359,4 @@ export class QueueEngine {
     });
   }
 
-  private async handleContentGeneration(job: QueueJobRecord): Promise<void> {
-    const { productId, contentType = "package", languageCode = "en", creditsRequired } = job.payload as {
-      productId: string;
-      contentType: "hooks" | "scripts" | "package";
-      languageCode?: string;
-      creditsRequired: number;
-    };
-    const product = this.db.getProducts(job.workspaceId).find((item) => item.id === productId);
-    if (!product) {
-      throw new Error("Product not found or access denied.");
-    }
-    const analysis = this.db.getLatestProductAnalysis(productId);
-    const payload = await ContentGenerator.generate(product, analysis, contentType, languageCode);
-    this.db.saveContentGeneration(productId, job.workspaceId, contentType, creditsRequired, payload);
-  }
-
-  private async handleVideoRendering(job: QueueJobRecord): Promise<void> {
-    const { generationId } = job.payload as { generationId: string };
-    await renderQueuedVideo(this.db, job.workspaceId, generationId);
-  }
-
-  private async handleSocialPublishing(job: QueueJobRecord): Promise<void> {
-    const { postId } = job.payload as { postId: string };
-    await publishQueuedSocialPost(this.db, job.workspaceId, postId);
-  }
-
-  private async handleAutomationExecution(job: QueueJobRecord): Promise<void> {
-    const { action, storeId, productId, detail } = job.payload as {
-      action: "auto_sync" | "auto_publish_generated_content" | "auto_create_social_posts" | "auto_generate_videos" | "auto_competitor_monitoring";
-      storeId: string;
-      productId?: string;
-      detail: string;
-    };
-
-    if (action === "auto_sync") {
-      refreshShopifyAccessToken(this.db, job.workspaceId, storeId);
-      const syncJobs = enqueueStoreSync(this.db, job.workspaceId, storeId);
-      syncJobs.forEach((syncJob) => {
-        this.db.enqueueQueueJob(job.workspaceId, {
-          kind: "shopify_sync",
-          workerName: "shopify-worker",
-          referenceId: syncJob.id,
-          payload: {
-            workspaceId: job.workspaceId,
-            storeId,
-          },
-          priority: 8,
-          maxAttempts: 4,
-          backoffMs: 2000,
-        });
-      });
-      this.db.saveShopifyAutomationRun(job.workspaceId, storeId, "auto_sync", "completed", detail);
-      return;
-    }
-
-    if (!productId) {
-      throw new Error("Automation productId is required.");
-    }
-
-    const product = this.db.getProducts(job.workspaceId).find((item) => item.id === productId);
-    if (!product) {
-      throw new Error("Automation product not found.");
-    }
-
-    const latestContent = this.db.getLatestContentGeneration(productId);
-    const latestAnalysis = this.db.getLatestProductAnalysis(productId);
-
-    if (action === "auto_publish_generated_content") {
-      const status = latestContent ? "completed" : "failed";
-      this.db.saveShopifyAutomationRun(job.workspaceId, storeId, action, status, detail, productId);
-      if (!latestContent) {
-        throw new Error("No generated content available for auto publish.");
-      }
-      return;
-    }
-
-    if (action === "auto_create_social_posts") {
-      this.db.saveSocialPosts(job.workspaceId, productId, [
-        {
-          platform: "instagram",
-          title: `${product.title} Social Launch`,
-          caption: `Freshly synced from Shopify: ${product.title}. ${detail}`,
-          hashtags: ["#shopify", "#productlaunch", "#socialautomation"],
-          mediaUrls: [product.images, ...product.gallery].filter(Boolean).slice(0, 2),
-          status: "draft",
-          previewText: `${product.title} social launch draft`,
-          sourceType: "queue_automation",
-          sourceGenerationId: latestContent?.id,
-        },
-      ]);
-      this.db.saveShopifyAutomationRun(job.workspaceId, storeId, action, "completed", detail, productId);
-      return;
-    }
-
-    if (action === "auto_generate_videos") {
-      const draft = await createVideoDraft(this.db, {
-        workspaceId: job.workspaceId,
-        product,
-        analysis: latestAnalysis,
-        latestContent,
-        template: "product_showcase",
-        outputType: "short_form_vertical",
-        inputMode: "product_images",
-        prompt: detail,
-        durationSeconds: 20,
-        aspectRatio: "9:16",
-        sourceImageUrls: [product.images, ...product.gallery].filter(Boolean),
-      });
-      this.db.enqueueQueueJob(job.workspaceId, {
-        kind: "ai_video_rendering",
-        workerName: "video-worker",
-        referenceId: draft.id,
-        payload: {
-          workspaceId: job.workspaceId,
-          generationId: draft.id,
-        },
-        priority: 8,
-        maxAttempts: 4,
-        backoffMs: 2500,
-      });
-      this.db.saveShopifyAutomationRun(job.workspaceId, storeId, action, "completed", detail, productId);
-      return;
-    }
-
-    if (action === "auto_competitor_monitoring") {
-      this.db.enqueueQueueJob(job.workspaceId, {
-        kind: "competitor_monitoring",
-        workerName: "automation-worker",
-        referenceId: productId,
-        payload: {
-          workspaceId: job.workspaceId,
-          productId,
-          storeId,
-          detail,
-        },
-        priority: 6,
-        maxAttempts: 3,
-        backoffMs: 5000,
-      });
-      this.db.saveShopifyAutomationRun(job.workspaceId, storeId, action, "completed", detail, productId);
-    }
-  }
-
-  private async handleCompetitorMonitoring(job: QueueJobRecord): Promise<void> {
-    const { productId, storeId, detail } = job.payload as {
-      productId: string;
-      storeId?: string;
-      detail?: string;
-    };
-    const product = this.db.getProducts(job.workspaceId).find((item) => item.id === productId);
-    if (!product) {
-      throw new Error("Competitor monitoring product not found.");
-    }
-    await ProductAnalyzer.analyze(product, "en", job.workspaceId);
-    if (storeId) {
-      this.db.saveShopifyAutomationRun(
-        job.workspaceId,
-        storeId,
-        "auto_competitor_monitoring",
-        "completed",
-        detail || `Completed competitor monitoring refresh for ${product.title}.`,
-        productId
-      );
-    }
-  }
-}
+  private async handleContentGeneration(job:
