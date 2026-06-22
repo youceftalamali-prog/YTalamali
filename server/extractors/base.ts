@@ -154,7 +154,16 @@ export abstract class BaseExtractor implements IProductExtractor {
 
   public validate(product: NormalizedProduct): { isValid: boolean; errors: string[] } {
     const errors: string[] = [];
+    
+    // تعريف الأسماء العامة المسموح بها مع استثناء لـ Shopify
     const genericVariantNames = new Set([
+      "default option",
+      "standard option",
+      "standard premium edition",
+    ]);
+    
+    // الأسماء العامة المسموح بها للمتغير الوحيد (خاصة Shopify)
+    const allowedSingleVariantNames = new Set([
       "default title",
       "default option",
       "standard option",
@@ -176,10 +185,28 @@ export abstract class BaseExtractor implements IProductExtractor {
     if (!Array.isArray(product.variants) || product.variants.length === 0) {
       errors.push("variants must be a non-empty array of size >= 1.");
     } else {
+      // فحص المتغيرات مع استثناء للمتغير الوحيد بعنوان Shopify الافتراضي
+      const hasGenericTitle = product.variants.some((v: any) => {
+        const normalizedTitle = String(v.title || "").trim().toLowerCase();
+        return genericVariantNames.has(normalizedTitle);
+      });
+      
+      // إذا كان هناك متغير واحد فقط وعنوانه عام، لا نضيف خطأ
+      const singleVariantWithGenericTitle = product.variants.length === 1 && 
+        allowedSingleVariantNames.has(String(product.variants[0].title || "").trim().toLowerCase());
+      
       product.variants.forEach((v: any, idx: number) => {
         if (!v.id) errors.push(`variant[${idx}].id is required.`);
         if (!v.title || v.title.trim() === "") errors.push(`variant[${idx}].title is required.`);
         if (!v.price || v.price.trim() === "") errors.push(`variant[${idx}].price is required.`);
+        
+        // التحقق من الأسماء العامة فقط إذا لم يكن متغيراً وحيداً بعنوان Shopify افتراضي
+        if (!singleVariantWithGenericTitle) {
+          const normalizedTitle = String(v.title || "").trim().toLowerCase();
+          if (genericVariantNames.has(normalizedTitle)) {
+            errors.push(`variant[${idx}] uses a generic placeholder title.`);
+          }
+        }
       });
     }
     if (typeof product.specifications !== "object" || product.specifications === null) {
@@ -209,12 +236,6 @@ export abstract class BaseExtractor implements IProductExtractor {
     if (product.images?.includes("unsplash.com") || product.gallery.some((img) => img.includes("unsplash.com"))) {
       errors.push("placeholder Unsplash images are not allowed.");
     }
-    product.variants.forEach((v: any, idx: number) => {
-      const normalizedTitle = String(v.title || "").trim().toLowerCase();
-      if (genericVariantNames.has(normalizedTitle)) {
-        errors.push(`variant[${idx}] uses a generic placeholder title.`);
-      }
-    });
 
     return {
       isValid: errors.length === 0,
