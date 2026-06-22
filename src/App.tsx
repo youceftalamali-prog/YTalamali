@@ -98,6 +98,23 @@ export default function App() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [selectedProductDetails, setSelectedProductDetails] = useState<NormalizedProduct | null>(null);
 
+  // Import status polling
+  const [importStatus, setImportStatus] = useState<{
+    operationId: string | null;
+    status: string | null;
+    provider: string | null;
+    errorMessage: string | null;
+    attemptCount: number | null;
+    product: NormalizedProduct | null;
+  }>({
+    operationId: null,
+    status: null,
+    provider: null,
+    errorMessage: null,
+    attemptCount: null,
+    product: null,
+  });
+
   // Navigation State
   const [activeRoute, setActiveRoute] = useState<AppRoute>("dashboard");
   const [productCenterTab, setProductCenterTab] = useState<ProductCenterTab>("details");
@@ -158,6 +175,14 @@ export default function App() {
     setActiveRoute("dashboard");
     setErrorText(null);
     setSuccessMessage(null);
+    setImportStatus({
+      operationId: null,
+      status: null,
+      provider: null,
+      errorMessage: null,
+      attemptCount: null,
+      product: null,
+    });
   };
 
   // Perform refilling action
@@ -177,6 +202,69 @@ export default function App() {
     }
   };
 
+  // Poll import status
+  const pollImportStatus = (operationId: string) => {
+    const pollInterval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/import/status/${operationId}?workspaceId=${workspaceId}`);
+        if (!res.ok) {
+          if (res.status === 404) {
+            clearInterval(pollInterval);
+            setErrorText("Import operation not found.");
+            setLoading(false);
+          }
+          return;
+        }
+        const data = await res.json();
+        setImportStatus({
+          operationId: data.id,
+          status: data.status,
+          provider: data.provider,
+          errorMessage: data.errorMessage,
+          attemptCount: data.attemptCount,
+          product: data.product,
+        });
+
+        if (data.status === "success") {
+          clearInterval(pollInterval);
+          setSuccessMessage(`✅ Import successful! Product "${data.product?.title}" cataloged.`);
+          setSelectedProductDetails(data.product);
+          setActiveRoute("product_detail");
+          setProductCenterTab("details");
+          setLoading(false);
+          fetchData();
+        } else if (data.status === "failed") {
+          clearInterval(pollInterval);
+          const provider = data.provider || "Unknown";
+          const attempts = data.attemptCount || 0;
+          const reason = data.errorMessage || "Unknown error";
+          setErrorText(
+            `❌ Import Failed\nProvider: ${provider}\nReason: ${reason}\nAttempts: ${attempts}`
+          );
+          setLoading(false);
+          fetchData();
+        } else {
+          // Update status message
+          setSuccessMessage(`⏳ Import status: ${data.status} ${data.attemptCount ? `(attempt ${data.attemptCount})` : ""}`);
+        }
+      } catch (err) {
+        console.error("Polling error:", err);
+        clearInterval(pollInterval);
+        setErrorText("Error checking import status.");
+        setLoading(false);
+      }
+    }, 2000);
+
+    // Cleanup after 2 minutes
+    setTimeout(() => {
+      clearInterval(pollInterval);
+      if (importStatus.status !== "success" && importStatus.status !== "failed") {
+        setErrorText("Import timed out. Check queue for details.");
+        setLoading(false);
+      }
+    }, 120000);
+  };
+
   // Trigger Import Operation
   const handleTriggerImport = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -188,6 +276,14 @@ export default function App() {
     setLoading(true);
     setErrorText(null);
     setSuccessMessage(null);
+    setImportStatus({
+      operationId: null,
+      status: null,
+      provider: null,
+      errorMessage: null,
+      attemptCount: null,
+      product: null,
+    });
 
     try {
       const res = await fetch("/api/import", {
@@ -206,25 +302,23 @@ export default function App() {
         throw new Error(data.error || "Failed importing product listing.");
       }
 
-      setSuccessMessage(
-        data.status === "queued"
-          ? "Product import queued for background processing."
-          : "Product cataloged successfully! Charged exactly 20 credits."
-      );
+      const operationId = data.operation?.id;
+      if (operationId) {
+        setSuccessMessage(`⏳ Import queued (ID: ${operationId}). Monitoring progress...`);
+        pollImportStatus(operationId);
+      } else {
+        setSuccessMessage("Product import queued for background processing.");
+        setLoading(false);
+      }
+
       setUrl("");
       setCustomPrompt("");
       setRawHtml("");
-      if (data.product) {
-        setSelectedProductDetails(data.product);
-        setActiveRoute("product_detail");
-        setProductCenterTab("details");
-      }
       fetchData();
     } catch (err: any) {
       setErrorText(err.message || "An unexpected error occurred during extraction.");
-      fetchData();
-    } finally {
       setLoading(false);
+      fetchData();
     }
   };
 
@@ -594,7 +688,7 @@ export default function App() {
                 </h2>
 
                 {errorText && (
-                  <div className="bg-rose-950/40 border border-rose-500/30 p-3.5 rounded-lg text-rose-300 text-xs flex items-start gap-2.5 animate-pulse">
+                  <div className="bg-rose-950/40 border border-rose-500/30 p-3.5 rounded-lg text-rose-300 text-xs flex items-start gap-2.5 animate-pulse whitespace-pre-wrap">
                     <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0 text-rose-400" />
                     <div>
                       <span className="font-semibold block">Failed Ingest Transaction</span>
@@ -607,7 +701,7 @@ export default function App() {
                   <div className="bg-emerald-950/40 border border-emerald-500/30 p-3.5 rounded-lg text-emerald-300 text-xs flex items-start gap-2.5">
                     <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0 text-emerald-400" />
                     <div>
-                      <span className="font-semibold block">Import Successful</span>
+                      <span className="font-semibold block">Import Status</span>
                       {successMessage}
                     </div>
                   </div>
