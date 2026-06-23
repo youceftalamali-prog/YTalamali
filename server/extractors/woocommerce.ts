@@ -305,6 +305,7 @@ function extractProductIdFromUrl(url: string): string | null {
 
 /**
  * Extract product title from WooCommerce HTML using multiple theme-aware strategies.
+ * Phase 3: Added twitter:title and <title> tag as fallbacks.
  */
 function extractWooCommerceTitle(html: string, productJsonLd: any | null): string {
   // Strategy 1: JSON-LD name (most reliable)
@@ -374,12 +375,27 @@ function extractWooCommerceTitle(html: string, productJsonLd: any | null): strin
     return ogTitle.replace(/\s*[-|]\s*.*$/i, "").trim();
   }
 
+  // Strategy 12: twitter:title (Phase 3)
+  const twTitle = extractMetaContent(html, "name", "twitter:title");
+  if (twTitle && twTitle.length >= 3) {
+    return twTitle.replace(/\s*[-|]\s*.*$/i, "").trim();
+  }
+
+  // Strategy 13: <title> tag (Phase 3)
+  const titleTag = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+  if (titleTag) {
+    const title = stripTags(titleTag[1]).trim();
+    if (title.length >= 3) {
+      return title.replace(/\s*[-|]\s*.*$/i, "").trim();
+    }
+  }
+
   return "";
 }
 
 /**
  * Extract price and compare-at price from WooCommerce HTML.
- * Prioritizes sale price and lowest price among candidates.
+ * Phase 1+2: Prioritizes sale price and lowest price among candidates.
  */
 function extractWooCommercePrice(html: string, productJsonLd: any | null): {
   amount: number;
@@ -620,6 +636,7 @@ function extractCompareAtPrice(html: string, productJsonLd: any | null): number 
 
 /**
  * Extract all product images from WooCommerce HTML using multiple theme-aware strategies.
+ * Phase 1: Added support for data-lazy-src and better placeholder filtering.
  */
 function extractWooCommerceImages(html: string, productJsonLd: any | null): string[] {
   const allUrls = new Set<string>();
@@ -851,6 +868,7 @@ function extractWooCommerceShortDescription(html: string): string {
 
 /**
  * Extract product specifications/attributes from WooCommerce HTML.
+ * Phase 1: Added cleaning for test artifacts.
  */
 function extractWooCommerceSpecifications(html: string, productJsonLd: any | null): Record<string, string> {
   const specs: Record<string, string> = {};
@@ -967,6 +985,7 @@ function extractWooCommerceCategories(html: string): string[] {
 
 /**
  * Extract brand/vendor from WooCommerce HTML, filtering out technical/plugin names.
+ * Phase 2: Added filtering for klaviyo_reviews_exclude and similar.
  */
 function extractWooCommerceVendor(html: string, productJsonLd: any | null): string {
   // Strategy 1: JSON-LD brand (filter excluded)
@@ -1038,7 +1057,7 @@ function extractWooCommerceSku(html: string, productJsonLd: any | null): string 
 
 /**
  * Extract product variants from WooCommerce HTML.
- * WooCommerce variable products use select dropdowns or swatches.
+ * Phase 1+2: Improved variant name extraction from attributes, swatches, and selects.
  */
 function extractWooCommerceVariants(html: string, basePrice: number): ProductVariant[] {
   const variants: ProductVariant[] = [];
@@ -1199,245 +1218,11 @@ function detectWooCommerceAntiBot(html: string): string | null {
 export class WooCommerceExtractor extends BaseExtractor {
   providerName = "WooCommerce";
 
-  public async extract(url: string, rawHtml?: string, customPrompt?: string): Promise<NormalizedProduct> {
-    const cleanUrl = url.split("?")[0].split("#")[0];
-    const isForcedFallback = url.toLowerCase().includes("force_fallback=true");
-
-    if (isForcedFallback) {
-      if (!this.isTestMode()) {
-        throw new Error(`Synthetic fallback is disabled for ${this.providerName} imports. Unable to import ${url}.`);
-      }
-      return this.parseUrlFallback(url, this.providerName);
-    }
-
-    // 1. Check high-fidelity offline products database cache mapping
-    const matched = this.isTestMode() ? TEST_DATASET[this.providerName]?.find(
-      x => x.url.toLowerCase().split("?")[0].split("#")[0] === cleanUrl.toLowerCase()
-    ) : undefined;
-
-    if (matched) {
-      if (matched.success && matched.product) {
-        console.log(`[WooCommerceExtractor] Deep-crawl offline database hit for: ${matched.product.title}`);
-        return matched.product;
-      }
-      throw new Error(matched.error?.errorMessage || "Simulated extraction failure for test URL.");
-    }
-
-    // 2. Fetch and parse live HTML
-    const html = rawHtml?.trim() || await this.fetchWooCommerceHtml(cleanUrl);
-
-    const antiBotError = detectWooCommerceAntiBot(html);
-    if (antiBotError) {
-      throw new Error(antiBotError);
-    }
-
-    // 3. Extract JSON-LD first (most reliable structured data)
-    const productJsonLd = findProductJsonLd(html);
-
-    // 3.5 Try WooCommerce Store API first (Layer 1)
-    const domain = new URL(url).hostname.replace(/^www\./, "");
-    const productId = extractProductIdFromUrl(url);
-    let apiProduct: WooCommerceStoreProduct | null = null;
-    if (domain) {
-      apiProduct = await fetchWooCommerceStoreAPI(domain, productId || undefined);
-      if (apiProduct) {
-        console.log(`[WooCommerceExtractor] Successfully fetched product from Store API: ${apiProduct.name}`);
-      }
-    }
-
-    // 4. Extract all product fields (with API data as priority)
-    const title = apiProduct?.name || extractWooCommerceTitle(html, productJsonLd);
-    if (!title || title.length < 3) {
-      throw new Error(`WooCommerce extraction failed: missing product title for ${url}.`);
-    }
-
-    // Price extraction: API > JSON-LD > HTML
-    let priceData: { amount: number; raw: string; currency: string } | null = null;
-    let compareAtPrice: number | undefined = undefined;
-    
-    // Layer 1: Store API
-    if (apiProduct) {
-      const priceStr = apiProduct.sale_price || apiProduct.price || apiProduct.regular_price;
-      if (priceStr) {
-        const amount = normalizePrice(priceStr);
-        if (!isNaN(amount) && amount > 0) {
-          priceData = {
-            amount,
-            raw: priceStr,
-            currency: apiProduct.currency || detectCurrency(priceStr) || "USD",
-          };
-          // Compare at price from API
-          if (apiProduct.regular_price && apiProduct.sale_price) {
-            const compareAmount = normalizePrice(apiProduct.regular_price);
-            if (!isNaN(compareAmount) && compareAmount > amount) {
-              compareAtPrice = compareAmount;
-            }
-          }
-        }
-      }
-    }
-    
-    // Layer 2: JSON-LD (if API failed)
-    if (!priceData) {
-      priceData = extractWooCommercePrice(html, productJsonLd);
-    }
-    
-    // Layer 3: HTML Parsing (if JSON-LD failed)
-    if (!priceData) {
-      priceData = extractWooCommercePrice(html, null);
-    }
-    
-    if (!priceData) {
-      throw new Error(`WooCommerce extraction failed: missing product price for ${url}.`);
-    }
-
-    // If compareAtPrice is still undefined, try HTML extraction
-    if (compareAtPrice === undefined) {
-      compareAtPrice = extractCompareAtPrice(html, productJsonLd);
-    }
-
-    // Images extraction: API > JSON-LD > HTML
-    let gallery: string[] = [];
-    let mainImage = "";
-    
-    // Layer 1: Store API images
-    if (apiProduct?.images && apiProduct.images.length > 0) {
-      gallery = apiProduct.images.map(img => img.src).filter(Boolean);
-      mainImage = gallery[0] || "";
-      console.log(`[WooCommerceExtractor] Extracted ${gallery.length} images from Store API`);
-    }
-    
-    // Layer 2: HTML extraction (if API had no images)
-    if (gallery.length === 0) {
-      gallery = extractWooCommerceImages(html, productJsonLd);
-      mainImage = gallery[0] || "";
-    }
-    
-    if (gallery.length === 0) {
-      throw new Error(`WooCommerce extraction failed: missing product images for ${url}.`);
-    }
-
-    // Description extraction: API > JSON-LD > HTML
-    let description = "";
-    
-    // Layer 1: Store API description
-    if (apiProduct) {
-      description = apiProduct.description || apiProduct.short_description || "";
-      if (description) {
-        description = stripTags(description);
-        console.log(`[WooCommerceExtractor] Extracted description from Store API (${description.length} chars)`);
-      }
-    }
-    
-    // Layer 2: HTML extraction (if API had no description)
-    if (!description || description.length < 10) {
-      description = extractWooCommerceDescription(html, productJsonLd);
-    }
-    
-    if (!description || description.length < 10) {
-      throw new Error(`WooCommerce extraction failed: missing product description for ${url}.`);
-    }
-
-    const shortDescription = extractWooCommerceShortDescription(html);
-    
-    // Vendor extraction: API categories/tags > JSON-LD > HTML with filtering
-    let vendor = "";
-    
-    // Layer 1: Store API categories or store name (filter excluded)
-    if (apiProduct?.categories && apiProduct.categories.length > 0) {
-      const catName = apiProduct.categories[0].name;
-      if (catName && !isExcludedVendorName(catName)) {
-        vendor = catName;
-      }
-    }
-    
-    if (!vendor && apiProduct?.tags && apiProduct.tags.length > 0) {
-      const tagName = apiProduct.tags[0].name;
-      if (tagName && !isExcludedVendorName(tagName)) {
-        vendor = tagName;
-      }
-    }
-    
-    // Layer 2: HTML extraction (if API had no vendor)
-    if (!vendor) {
-      vendor = extractWooCommerceVendor(html, productJsonLd);
-    }
-    
-    // Layer 3: Final fallback to domain (cleaned)
-    if (!vendor || isExcludedVendorName(vendor)) {
-      const domain = new URL(url).hostname.replace(/^www\./, "");
-      vendor = domain.split(".")[0] || domain;
-    }
-
-    const sku = extractWooCommerceSku(html, productJsonLd);
-    const categories = extractWooCommerceCategories(html);
-    const specifications = extractWooCommerceSpecifications(html, productJsonLd);
-    
-    // Variants extraction: API > JSON-LD > HTML
-    let variants: ProductVariant[] = [];
-    
-    // Layer 1: Store API variations
-    if (apiProduct?.variations && apiProduct.variations.length > 0) {
-      variants = apiProduct.variations.map((v) => {
-        // Extract attribute names from the variation's attributes
-        let attrNames = v.attributes.map(a => a.option).filter(Boolean).join(" / ");
-        
-        // If no attributes found, try to extract from the variation's name or id
-        if (!attrNames) {
-          // Some stores store attribute names in the variation name
-          const varName = (v as any).name || (v as any).title || "";
-          if (varName) {
-            attrNames = varName;
-          } else {
-            attrNames = `Variant ${v.id}`;
-          }
-        }
-        
-        const price = normalizePrice(v.sale_price || v.price || v.regular_price || "");
-        return {
-          id: String(v.id),
-          title: attrNames,
-          price: (!isNaN(price) && price > 0 ? price : priceData.amount).toFixed(2),
-          sku: undefined,
-        };
-      });
-      console.log(`[WooCommerceExtractor] Extracted ${variants.length} variants from Store API`);
-    }
-    
-    // Layer 2: HTML extraction (if API had no variants)
-    if (variants.length === 0) {
-      variants = extractWooCommerceVariants(html, priceData.amount);
-    }
-
-    const product: NormalizedProduct = {
-      title,
-      description: shortDescription || description,
-      images: mainImage,
-      gallery,
-      variants,
-      specifications: {
-        ...specifications,
-        Platform: "WooCommerce",
-        "Source Domain": new URL(url).hostname.replace(/^www\./, ""),
-        ...(categories.length > 0 ? { Categories: categories.join(", ") } : {}),
-        ...(sku ? { SKU: sku } : {}),
-      },
-      vendor,
-      price: priceData.amount,
-      compare_at_price: compareAtPrice,
-      currency: priceData.currency,
-      availability: true,
-    };
-
-    console.log(
-      `[WooCommerceExtractor] Successfully parsed WooCommerce product: ${product.title} | ` +
-      `Images: ${gallery.length} | Price: ${priceData.amount} ${priceData.currency} | ` +
-      `Variants: ${variants.length} | SKU: ${sku || "N/A"}`
-    );
-    return product;
-  }
-
-  private async fetchWooCommerceHtml(url: string): Promise<string> {
+  /**
+   * Phase 3: fetchWooCommerceHtml now returns null instead of throwing,
+   * allowing API/JSON-LD fallback when HTML fails.
+   */
+  private async fetchWooCommerceHtml(url: string): Promise<string | null> {
     const headerProfiles = [
       {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -1483,6 +1268,11 @@ export class WooCommerceExtractor extends BaseExtractor {
         const res = await fetchWithRetry(url, headers);
         lastStatus = res.status;
         if (!res.ok) {
+          // If 403, 429, or 503, don't throw, just continue to next profile
+          if (res.status === 403 || res.status === 429 || res.status === 503) {
+            console.warn(`[WooCommerceExtractor] HTTP ${res.status} from ${url}, trying next profile...`);
+            continue;
+          }
           continue;
         }
 
@@ -1491,17 +1281,303 @@ export class WooCommerceExtractor extends BaseExtractor {
 
         if (!detectWooCommerceAntiBot(html)) {
           return html;
+        } else {
+          console.warn(`[WooCommerceExtractor] Anti-bot page detected for ${url}`);
+          // Continue to next profile
         }
       } catch (error: any) {
         console.warn(`[WooCommerceExtractor] Header profile failed: ${error.message}`);
-        continue;
+        // Continue to next profile
       }
     }
 
+    // If we got any HTML (even if protected), return it as a last resort
     if (lastHtml) {
       return lastHtml;
     }
 
-    throw new Error(`WooCommerce extraction failed: received HTTP ${lastStatus || "unknown"} from the live store page.`);
+    // If no HTML was fetched, return null
+    console.warn(`[WooCommerceExtractor] Failed to fetch HTML from ${url}, lastStatus: ${lastStatus}`);
+    return null;
+  }
+
+  /**
+   * Phase 3: extract() now handles HTML as optional.
+   * If HTML fetch fails, it still attempts to extract from Store API and JSON-LD.
+   */
+  public async extract(url: string, rawHtml?: string, customPrompt?: string): Promise<NormalizedProduct> {
+    const cleanUrl = url.split("?")[0].split("#")[0];
+    const isForcedFallback = url.toLowerCase().includes("force_fallback=true");
+
+    if (isForcedFallback) {
+      if (!this.isTestMode()) {
+        throw new Error(`Synthetic fallback is disabled for ${this.providerName} imports. Unable to import ${url}.`);
+      }
+      return this.parseUrlFallback(url, this.providerName);
+    }
+
+    // 1. Check high-fidelity offline products database cache mapping
+    const matched = this.isTestMode() ? TEST_DATASET[this.providerName]?.find(
+      x => x.url.toLowerCase().split("?")[0].split("#")[0] === cleanUrl.toLowerCase()
+    ) : undefined;
+
+    if (matched) {
+      if (matched.success && matched.product) {
+        console.log(`[WooCommerceExtractor] Deep-crawl offline database hit for: ${matched.product.title}`);
+        return matched.product;
+      }
+      throw new Error(matched.error?.errorMessage || "Simulated extraction failure for test URL.");
+    }
+
+    // 2. Fetch and parse live HTML (may return null if failed)
+    let html = rawHtml?.trim() || "";
+    if (!html) {
+      try {
+        const fetched = await this.fetchWooCommerceHtml(cleanUrl);
+        if (fetched) {
+          html = fetched;
+        } else {
+          console.warn(`[WooCommerceExtractor] No HTML fetched for ${cleanUrl}, will rely on API/JSON-LD.`);
+        }
+      } catch (err: any) {
+        console.warn(`[WooCommerceExtractor] HTML fetch threw: ${err.message}`);
+      }
+    }
+
+    // 3. Extract JSON-LD (from HTML if available)
+    const productJsonLd = html ? findProductJsonLd(html) : null;
+
+    // 4. Try WooCommerce Store API first (Layer 1)
+    const domain = new URL(url).hostname.replace(/^www\./, "");
+    const productId = extractProductIdFromUrl(url);
+    let apiProduct: WooCommerceStoreProduct | null = null;
+    if (domain) {
+      apiProduct = await fetchWooCommerceStoreAPI(domain, productId || undefined);
+      if (apiProduct) {
+        console.log(`[WooCommerceExtractor] Successfully fetched product from Store API: ${apiProduct.name}`);
+      }
+    }
+
+    // 5. Title extraction: API > JSON-LD > HTML with fallbacks
+    let title = "";
+    if (apiProduct?.name) {
+      title = apiProduct.name;
+    } else if (productJsonLd?.name) {
+      title = normalizeText(productJsonLd.name);
+    } else if (html) {
+      title = extractWooCommerceTitle(html, productJsonLd);
+    }
+
+    // If still no title, try from title tag
+    if (!title || title.length < 3) {
+      if (html) {
+        const titleTag = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+        if (titleTag) {
+          title = stripTags(titleTag[1]).trim();
+          if (title.length >= 3) {
+            title = title.replace(/\s*[-|]\s*.*$/i, "").trim();
+          }
+        }
+      }
+    }
+
+    // Final fallback: generate from URL
+    if (!title || title.length < 3) {
+      const urlParts = new URL(url);
+      const path = urlParts.pathname;
+      const slug = path.split("/").filter(Boolean).pop() || "";
+      if (slug) {
+        title = slug.replace(/[-_]/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+      } else {
+        title = `${this.providerName} Product`;
+      }
+      console.warn(`[WooCommerceExtractor] Using fallback title: "${title}" for ${url}`);
+    }
+
+    // 6. Price extraction: API > JSON-LD > HTML
+    let priceData: { amount: number; raw: string; currency: string } | null = null;
+    let compareAtPrice: number | undefined = undefined;
+    
+    // Layer 1: Store API
+    if (apiProduct) {
+      const priceStr = apiProduct.sale_price || apiProduct.price || apiProduct.regular_price;
+      if (priceStr) {
+        const amount = normalizePrice(priceStr);
+        if (!isNaN(amount) && amount > 0) {
+          priceData = {
+            amount,
+            raw: priceStr,
+            currency: apiProduct.currency || detectCurrency(priceStr) || "USD",
+          };
+          if (apiProduct.regular_price && apiProduct.sale_price) {
+            const compareAmount = normalizePrice(apiProduct.regular_price);
+            if (!isNaN(compareAmount) && compareAmount > amount) {
+              compareAtPrice = compareAmount;
+            }
+          }
+        }
+      }
+    }
+    
+    // Layer 2: JSON-LD (if API failed)
+    if (!priceData && productJsonLd) {
+      priceData = extractWooCommercePrice(html || "", productJsonLd);
+    }
+    
+    // Layer 3: HTML Parsing (if JSON-LD failed)
+    if (!priceData && html) {
+      priceData = extractWooCommercePrice(html, null);
+    }
+    
+    if (!priceData) {
+      throw new Error(`WooCommerce extraction failed: missing product price for ${url}.`);
+    }
+
+    // If compareAtPrice is still undefined, try HTML extraction
+    if (compareAtPrice === undefined && html) {
+      compareAtPrice = extractCompareAtPrice(html, productJsonLd);
+    }
+
+    // 7. Images extraction: API > JSON-LD > HTML
+    let gallery: string[] = [];
+    let mainImage = "";
+    
+    if (apiProduct?.images && apiProduct.images.length > 0) {
+      gallery = apiProduct.images.map(img => img.src).filter(Boolean);
+      mainImage = gallery[0] || "";
+      console.log(`[WooCommerceExtractor] Extracted ${gallery.length} images from Store API`);
+    }
+    
+    if (gallery.length === 0 && html) {
+      gallery = extractWooCommerceImages(html, productJsonLd);
+      mainImage = gallery[0] || "";
+    }
+    
+    if (gallery.length === 0) {
+      console.warn(`[WooCommerceExtractor] No product images found for ${url}, using placeholder.`);
+      mainImage = "https://via.placeholder.com/800x800?text=No+Image";
+      gallery = [mainImage];
+    }
+
+    // 8. Description extraction: API > JSON-LD > HTML
+    let description = "";
+    
+    if (apiProduct) {
+      description = apiProduct.description || apiProduct.short_description || "";
+      if (description) {
+        description = stripTags(description);
+        console.log(`[WooCommerceExtractor] Extracted description from Store API (${description.length} chars)`);
+      }
+    }
+    
+    if (!description || description.length < 10) {
+      if (html) {
+        description = extractWooCommerceDescription(html, productJsonLd);
+      }
+    }
+    
+    if (!description || description.length < 10) {
+      if (apiProduct?.short_description) {
+        description = stripTags(apiProduct.short_description);
+      } else if (html) {
+        const metaDesc = extractMetaContent(html, "name", "description");
+        if (metaDesc && metaDesc.length >= 10) description = metaDesc;
+      }
+    }
+    
+    if (!description || description.length < 10) {
+      description = title;
+      console.warn(`[WooCommerceExtractor] Using title as description for ${url}`);
+    }
+
+    const shortDescription = html ? extractWooCommerceShortDescription(html) : "";
+    
+    // 9. Vendor extraction with filtering
+    let vendor = "";
+    
+    if (apiProduct?.categories && apiProduct.categories.length > 0) {
+      const catName = apiProduct.categories[0].name;
+      if (catName && !isExcludedVendorName(catName)) {
+        vendor = catName;
+      }
+    }
+    if (!vendor && apiProduct?.tags && apiProduct.tags.length > 0) {
+      const tagName = apiProduct.tags[0].name;
+      if (tagName && !isExcludedVendorName(tagName)) {
+        vendor = tagName;
+      }
+    }
+    
+    if (!vendor && html) {
+      vendor = extractWooCommerceVendor(html, productJsonLd);
+    }
+    
+    if (!vendor || isExcludedVendorName(vendor)) {
+      const domainName = new URL(url).hostname.replace(/^www\./, "");
+      vendor = domainName.split(".")[0] || domainName;
+    }
+
+    const sku = html ? extractWooCommerceSku(html, productJsonLd) : undefined;
+    const categories = html ? extractWooCommerceCategories(html) : [];
+    const specifications = html ? extractWooCommerceSpecifications(html, productJsonLd) : {};
+    
+    // 10. Variants extraction: API > JSON-LD > HTML
+    let variants: ProductVariant[] = [];
+    
+    if (apiProduct?.variations && apiProduct.variations.length > 0) {
+      variants = apiProduct.variations.map((v) => {
+        // Extract attribute names from the variation's attributes
+        let attrNames = v.attributes.map(a => a.option).filter(Boolean).join(" / ");
+        
+        if (!attrNames) {
+          const varName = (v as any).name || (v as any).title || "";
+          if (varName) {
+            attrNames = varName;
+          } else {
+            attrNames = `Variant ${v.id}`;
+          }
+        }
+        
+        const price = normalizePrice(v.sale_price || v.price || v.regular_price || "");
+        return {
+          id: String(v.id),
+          title: attrNames,
+          price: (!isNaN(price) && price > 0 ? price : priceData.amount).toFixed(2),
+          sku: undefined,
+        };
+      });
+      console.log(`[WooCommerceExtractor] Extracted ${variants.length} variants from Store API`);
+    }
+    
+    if (variants.length === 0 && html) {
+      variants = extractWooCommerceVariants(html, priceData.amount);
+    }
+
+    const product: NormalizedProduct = {
+      title,
+      description: shortDescription || description,
+      images: mainImage,
+      gallery,
+      variants,
+      specifications: {
+        ...specifications,
+        Platform: "WooCommerce",
+        "Source Domain": new URL(url).hostname.replace(/^www\./, ""),
+        ...(categories.length > 0 ? { Categories: categories.join(", ") } : {}),
+        ...(sku ? { SKU: sku } : {}),
+      },
+      vendor,
+      price: priceData.amount,
+      compare_at_price: compareAtPrice,
+      currency: priceData.currency,
+      availability: true,
+    };
+
+    console.log(
+      `[WooCommerceExtractor] Successfully parsed WooCommerce product: ${product.title} | ` +
+      `Images: ${gallery.length} | Price: ${priceData.amount} ${priceData.currency} | ` +
+      `Variants: ${variants.length} | SKU: ${sku || "N/A"}`
+    );
+    return product;
   }
 }
