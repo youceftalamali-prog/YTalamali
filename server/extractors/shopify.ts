@@ -35,14 +35,35 @@ function sanitizeHtmlDescription(html: string): string {
   if (!html) return "";
   let text = html;
 
-  // Replace spacing elements with appropriate lines
+  // 1. Remove <style> and <script> tags with all their content
+  text = text.replace(/<style[\s\S]*?<\/style>/gi, "");
+  text = text.replace(/<script[\s\S]*?<\/script>/gi, "");
+
+  // 2. Remove @import url(...) lines (CSS and font imports)
+  text = text.replace(/@import\s+url\([^)]*\)[;]?/gi, "");
+
+  // 3. Remove <link> tags that load Google Fonts
+  text = text.replace(/<link[^>]+href=["'][^"']*fonts\.(googleapis|gstatic)\.com[^"']*["'][^>]*>/gi, "");
+
+  // 4. Remove inline style attributes from remaining HTML tags
+  text = text.replace(/style\s*=\s*["'][^"']*["']/gi, "");
+
+  // 5. Remove CSS property declarations that often appear in cleaned text
+  text = text.replace(/\b(font-family|font-size|margin|padding|color|background|display)\s*:[^;]*;?/gi, "");
+
+  // 6. Remove leftover CSS selectors (e.g., .class, #id, body, html, div) if they appear with braces
+  text = text.replace(/\.([a-zA-Z0-9_-]+)\s*\{/g, "");
+  text = text.replace(/#([a-zA-Z0-9_-]+)\s*\{/g, "");
+  text = text.replace(/\b(body|html|div|span|p|h1|h2|h3|h4|h5|h6|ul|ol|li|a|img|table|tr|td|th|form|input|button|section|article|header|footer|nav|main|aside)\s*\{/gi, "");
+
+  // 7. Original logic: replace spacing elements with newlines
   text = text.replace(/<(p|div|br|li|h[1-6])[^>]*>/gi, "\n");
   text = text.replace(/<\/li>/gi, "\n");
 
-  // Strip all other HTML tags
+  // 8. Strip all remaining HTML tags
   text = text.replace(/<[^>]*>/g, "");
 
-  // Decode common HTML entities
+  // 9. Decode common HTML entities
   text = text
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
@@ -54,9 +75,16 @@ function sanitizeHtmlDescription(html: string): string {
     .replace(/&ldquo;/g, '"')
     .replace(/&rdquo;/g, '"');
 
+  // 10. Final cleanup: remove any leftover CSS-like property declarations
+  text = text.replace(/\b(font-family|font-size|margin|padding|color|background|display)\s*:[^;]*;?/gi, "");
+
+  // 11. Remove leftover @import or url(...) strings
+  text = text.replace(/@import\s+url\([^)]*\)/gi, "");
+  text = text.replace(/url\([^)]*\)/gi, "");
+
+  // 12. Split, trim, and join lines as before
   return text.split("\n").map(line => line.trim()).filter(Boolean).join("\n\n").trim();
 }
-
 // ─── NEW: Cloud Run Helpers ──────────────────────────────────────────────────
 
 function decodeHtmlEntities(input: string): string {
