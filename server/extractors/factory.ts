@@ -10,12 +10,25 @@ export class ExtractorFactory {
   public static getExtractor(url: string): IProductExtractor {
     const lowerUrl = url.toLowerCase();
 
-    if (lowerUrl.includes("shopify") || lowerUrl.includes("myshopify") || lowerUrl.includes("/products/")) {
-      return new ShopifyExtractor();
-    }
-    if (lowerUrl.includes("woocommerce") || lowerUrl.includes("woo.") || lowerUrl.includes("wc-")) {
+    // WooCommerce detection FIRST (higher priority) to prevent misclassification
+    if (
+      lowerUrl.includes("woocommerce") ||
+      lowerUrl.includes("woo.") ||
+      lowerUrl.includes("wc-") ||
+      lowerUrl.includes("wp-json") ||
+      lowerUrl.includes("product_cat") ||
+      lowerUrl.includes("add-to-cart") ||
+      /\/product\/[^\/?#]+\/?(?:\?|$)/.test(lowerUrl) // /product/slug pattern
+    ) {
       return new WooCommerceExtractor();
     }
+
+    // Shopify detection - only if clearly Shopify
+    if (lowerUrl.includes("shopify") || lowerUrl.includes("myshopify")) {
+      return new ShopifyExtractor();
+    }
+
+    // Other platforms
     if (lowerUrl.includes("amazon.") || lowerUrl.includes("amzn.")) {
       return new AmazonExtractor();
     }
@@ -29,7 +42,7 @@ export class ExtractorFactory {
       return new EBayExtractor();
     }
 
-    // Default fallback to Shopify extractor
-    return new ShopifyExtractor();
+    // Default fallback: try WooCommerce first (since it's the most common)
+    return new WooCommerceExtractor();
   }
 }

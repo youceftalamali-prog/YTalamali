@@ -12,15 +12,42 @@ const MAX_BACKOFF_MS = 20_000;
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function decodeHtmlEntities(input: string): string {
+  if (!input) return "";
   return input
+    // Common HTML entities
     .replace(/&quot;/g, '"')
     .replace(/&#34;/g, '"')
     .replace(/&apos;/g, "'")
     .replace(/&#39;/g, "'")
+    .replace(/&#039;/g, "'")
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
-    .replace(/&nbsp;/g, " ");
+    .replace(/&nbsp;/g, " ")
+    .replace(/&ndash;/g, "–")
+    .replace(/&mdash;/g, "—")
+    .replace(/&lsquo;/g, "'")
+    .replace(/&rsquo;/g, "'")
+    .replace(/&ldquo;/g, '"')
+    .replace(/&rdquo;/g, '"')
+    .replace(/&bull;/g, "•")
+    .replace(/&reg;/g, "®")
+    .replace(/&copy;/g, "©")
+    .replace(/&trade;/g, "™")
+    // Hex entities
+    .replace(/&#x2013;/g, "–")
+    .replace(/&#x2014;/g, "—")
+    .replace(/&#x2018;/g, "'")
+    .replace(/&#x2019;/g, "'")
+    .replace(/&#x201C;/g, '"')
+    .replace(/&#x201D;/g, '"')
+    // Decimal entities
+    .replace(/&#8211;/g, "–")
+    .replace(/&#8212;/g, "—")
+    .replace(/&#8216;/g, "'")
+    .replace(/&#8217;/g, "'")
+    .replace(/&#8220;/g, '"')
+    .replace(/&#8221;/g, '"');
 }
 
 function stripTags(input: string): string {
@@ -37,7 +64,8 @@ function normalizeText(input: unknown): string {
 }
 
 function normalizePrice(input: string): number {
-  const match = normalizeText(input).replace(/,/g, "").match(/(\d+(?:\.\d+)?)/);
+  const cleaned = normalizeText(input).replace(/,/g, "").replace(/[^\d.]/g, "");
+  const match = cleaned.match(/(\d+(?:\.\d+)?)/);
   return match ? parseFloat(match[1]) : NaN;
 }
 
@@ -156,6 +184,102 @@ function findProductJsonLd(html: string): any | null {
     const type = entry?.["@type"];
     return type === "Product" || (Array.isArray(type) && type.includes("Product"));
   }) || null;
+}
+
+// ─── WooCommerce Store API Layer ─────────────────────────────────────────────
+
+interface WooCommerceStoreProduct {
+  id: number;
+  name: string;
+  description: string;
+  short_description: string;
+  price: string;
+  regular_price?: string;
+  sale_price?: string;
+  currency?: string;
+  images?: Array<{ src: string }>;
+  variations?: Array<{
+    id: number;
+    attributes: Array<{ name: string; option: string }>;
+    price: string;
+    regular_price?: string;
+    sale_price?: string;
+    image?: { src: string };
+  }>;
+  attributes?: Array<{
+    name: string;
+    options: string[];
+    variation: boolean;
+  }>;
+  categories?: Array<{ name: string }>;
+  tags?: Array<{ name: string }>;
+  sku?: string;
+  stock_status?: string;
+}
+
+async function fetchWooCommerceStoreAPI(domain: string, productId?: string): Promise<WooCommerceStoreProduct | null> {
+  try {
+    // Try Store API first (public, no auth required)
+    const storeApiUrl = productId 
+      ? `https://${domain}/wp-json/wc/store/products/${productId}`
+      : `https://${domain}/wp-json/wc/store/products`;
+    
+    const response = await fetch(storeApiUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json",
+      },
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      if (Array.isArray(data) && data.length > 0) {
+        return data[0];
+      }
+      return data;
+    }
+    
+    // Fallback to WC REST API (requires auth, but some stores allow public access)
+    const restApiUrl = productId
+      ? `https://${domain}/wp-json/wc/v3/products/${productId}`
+      : `https://${domain}/wp-json/wc/v3/products`;
+    
+    const restResponse = await fetch(restApiUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json",
+      },
+    });
+    
+    if (restResponse.ok) {
+      const data = await restResponse.json();
+      if (Array.isArray(data) && data.length > 0) {
+        return data[0];
+      }
+      return data;
+    }
+    
+    return null;
+  } catch (error) {
+    console.warn(`[WooCommerceExtractor] Store API fetch failed:`, error);
+    return null;
+  }
+}
+
+function extractProductIdFromUrl(url: string): string | null {
+  // Try to extract product ID from URL patterns
+  const patterns = [
+    /\/product\/([^\/?#]+)/i,
+    /\/p\/([^\/?#]+)/i,
+    /\/products\/([^\/?#]+)/i,
+    /\?product_id=(\d+)/i,
+    /\/(\d+)\/?$/i,
+  ];
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
 }
 
 // ─── WooCommerce-Specific Extraction Functions ───────────────────────────────
@@ -346,7 +470,7 @@ function extractWooCommercePrice(html: string, productJsonLd: any | null): {
     }
   }
 
-    // Strategy 9: itemprop="price"
+  // Strategy 9: itemprop="price"
   const itempropPrice = html.match(/<[^>]+itemprop=["']price["'][^>]*>([\s\S]*?)<\/[^>]+>/i);
   if (itempropPrice) {
     const raw = stripTags(itempropPrice[1]);
@@ -366,7 +490,7 @@ function extractWooCommercePrice(html: string, productJsonLd: any | null): {
     }
   }
 
-  // Strategy 11: woocommerce-Price-amount
+  // Strategy 11: woocommerce-Price-amount (general)
   const wooPriceAmount = html.match(/<[^>]+class=["'][^"']*woocommerce-Price-amount[^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/i);
   if (wooPriceAmount) {
     const raw = stripTags(wooPriceAmount[1]);
@@ -376,7 +500,7 @@ function extractWooCommercePrice(html: string, productJsonLd: any | null): {
     }
   }
 
-  // Strategy 12: span.amount
+  // Strategy 12: span.amount (fallback)
   const amountSpan = html.match(/<span[^>]+class=["'][^"']*amount[^"']*["'][^>]*>([\s\S]*?)<\/span>/i);
   if (amountSpan) {
     const raw = stripTags(amountSpan[1]);
@@ -441,96 +565,88 @@ function extractCompareAtPrice(html: string, productJsonLd: any | null): number 
 function extractWooCommerceImages(html: string, productJsonLd: any | null): string[] {
   const allUrls = new Set<string>();
 
+  // Helper: filter out placeholder images
+  const isPlaceholder = (url: string): boolean => {
+    const lower = url.toLowerCase();
+    return lower.includes("placeholder") 
+      || lower.includes("via.placeholder") 
+      || lower.includes("data:image") 
+      || lower.includes("1x1") 
+      || lower.includes("pixel") 
+      || lower.includes(".svg") 
+      || lower.includes("loading.gif");
+  };
+
+  // Helper: clean URL and add if valid
+  const addUrl = (rawUrl: string) => {
+    if (!rawUrl) return;
+    const url = decodeHtmlEntities(rawUrl).trim();
+    if (url.startsWith("http") && !isPlaceholder(url)) {
+      allUrls.add(url);
+    }
+  };
+
   // Strategy 1: JSON-LD images
   if (productJsonLd?.image) {
     const jsonLdImages = Array.isArray(productJsonLd.image)
       ? productJsonLd.image.map((img: unknown) => String(img))
       : [String(productJsonLd.image)];
-    jsonLdImages.forEach((img: string) => {
-      if (img.startsWith("http")) allUrls.add(img);
-    });
+    jsonLdImages.forEach((img) => addUrl(img));
   }
 
-  // Strategy 2: WooCommerce product gallery thumbnails
+  // Strategy 2: WooCommerce product gallery thumbnails (support data-src, data-lazy-src)
   const galleryMatches = Array.from(
-    html.matchAll(/class=["'][^"']*woocommerce-product-gallery[^"']*["'][\s\S]{0,8000}?<img[^>]+(?:src|data-src|data-large_image)=["']([^"']+)["']/gi)
+    html.matchAll(/class=["'][^"']*woocommerce-product-gallery[^"']*["'][\s\S]{0,8000}?<img[^>]+(?:src|data-src|data-lazy-src|data-large_image)=["']([^"']+)["']/gi)
   );
-  galleryMatches.forEach((m) => {
-    const url = decodeHtmlEntities(m[1]).trim();
-    if (url.startsWith("http")) allUrls.add(url);
-  });
+  galleryMatches.forEach((m) => addUrl(m[1]));
 
   // Strategy 3: Standard WooCommerce gallery
   const wooGallery = Array.from(
-    html.matchAll(/class=["'][^"']*woocommerce-product-gallery__image[^"']*["'][\s\S]{0,3000}?<img[^>]+(?:src|data-src|data-large_image)=["']([^"']+)["']/gi)
+    html.matchAll(/class=["'][^"']*woocommerce-product-gallery__image[^"']*["'][\s\S]{0,3000}?<img[^>]+(?:src|data-src|data-lazy-src|data-large_image)=["']([^"']+)["']/gi)
   );
-  wooGallery.forEach((m) => {
-    const url = decodeHtmlEntities(m[1]).trim();
-    if (url.startsWith("http")) allUrls.add(url);
-  });
+  wooGallery.forEach((m) => addUrl(m[1]));
 
   // Strategy 4: Featured image / post thumbnail
   const featuredMatch = html.match(
-    /class=["'][^"']*(?:wp-post-image|attachment-woocommerce_thumbnail|featured-image)[^"']*["'][^>]+(?:src|data-src)=["']([^"']+)["']/i
+    /class=["'][^"']*(?:wp-post-image|attachment-woocommerce_thumbnail|featured-image)[^"']*["'][^>]+(?:src|data-src|data-lazy-src)=["']([^"']+)["']/i
   );
-  if (featuredMatch?.[1]) {
-    const url = decodeHtmlEntities(featuredMatch[1]).trim();
-    if (url.startsWith("http")) allUrls.add(url);
-  }
+  if (featuredMatch?.[1]) addUrl(featuredMatch[1]);
 
   // Strategy 5: Astra theme gallery
   const astraGallery = Array.from(
-    html.matchAll(/class=["'][^"']*astra-shop-thumbnail[^"']*["'][^>]+(?:src|data-src)=["']([^"']+)["']/gi)
+    html.matchAll(/class=["'][^"']*astra-shop-thumbnail[^"']*["'][^>]+(?:src|data-src|data-lazy-src)=["']([^"']+)["']/gi)
   );
-  astraGallery.forEach((m) => {
-    const url = decodeHtmlEntities(m[1]).trim();
-    if (url.startsWith("http")) allUrls.add(url);
-  });
+  astraGallery.forEach((m) => addUrl(m[1]));
 
   // Strategy 6: Flatsome theme gallery
   const flatsomeGallery = Array.from(
-    html.matchAll(/class=["'][^"']*product-gallery[^"']*["'][\s\S]{0,5000}?<img[^>]+(?:src|data-src)=["']([^"']+)["']/gi)
+    html.matchAll(/class=["'][^"']*product-gallery[^"']*["'][\s\S]{0,5000}?<img[^>]+(?:src|data-src|data-lazy-src)=["']([^"']+)["']/gi)
   );
-  flatsomeGallery.forEach((m) => {
-    const url = decodeHtmlEntities(m[1]).trim();
-    if (url.startsWith("http")) allUrls.add(url);
-  });
+  flatsomeGallery.forEach((m) => addUrl(m[1]));
 
   // Strategy 7: WoodMart theme gallery
   const woodmartGallery = Array.from(
-    html.matchAll(/class=["'][^"']*product-image-wrap[^"']*["'][\s\S]{0,3000}?<img[^>]+(?:src|data-src)=["']([^"']+)["']/gi)
+    html.matchAll(/class=["'][^"']*product-image-wrap[^"']*["'][\s\S]{0,3000}?<img[^>]+(?:src|data-src|data-lazy-src)=["']([^"']+)["']/gi)
   );
-  woodmartGallery.forEach((m) => {
-    const url = decodeHtmlEntities(m[1]).trim();
-    if (url.startsWith("http")) allUrls.add(url);
-  });
+  woodmartGallery.forEach((m) => addUrl(m[1]));
 
   // Strategy 8: Elementor WooCommerce images
   const elementorImages = Array.from(
-    html.matchAll(/class=["'][^"']*elementor-widget-woocommerce-product-images[^"']*["'][\s\S]{0,5000}?<img[^>]+(?:src|data-src)=["']([^"']+)["']/gi)
+    html.matchAll(/class=["'][^"']*elementor-widget-woocommerce-product-images[^"']*["'][\s\S]{0,5000}?<img[^>]+(?:src|data-src|data-lazy-src)=["']([^"']+)["']/gi)
   );
-  elementorImages.forEach((m) => {
-    const url = decodeHtmlEntities(m[1]).trim();
-    if (url.startsWith("http")) allUrls.add(url);
-  });
+  elementorImages.forEach((m) => addUrl(m[1]));
 
   // Strategy 9: Divi theme images
   const diviImages = Array.from(
-    html.matchAll(/class=["'][^"']*et_pb_wc_images[^"']*["'][\s\S]{0,5000}?<img[^>]+(?:src|data-src)=["']([^"']+)["']/gi)
+    html.matchAll(/class=["'][^"']*et_pb_wc_images[^"']*["'][\s\S]{0,5000}?<img[^>]+(?:src|data-src|data-lazy-src)=["']([^"']+)["']/gi)
   );
-  diviImages.forEach((m) => {
-    const url = decodeHtmlEntities(m[1]).trim();
-    if (url.startsWith("http")) allUrls.add(url);
-  });
+  diviImages.forEach((m) => addUrl(m[1]));
 
   // Strategy 10: data-large_image (WooCommerce zoom feature)
   const largeImageMatches = Array.from(
     html.matchAll(/data-large_image=["']([^"']+)["']/gi)
   );
-  largeImageMatches.forEach((m) => {
-    const url = decodeHtmlEntities(m[1]).trim();
-    if (url.startsWith("http")) allUrls.add(url);
-  });
+  largeImageMatches.forEach((m) => addUrl(m[1]));
 
   // Strategy 11: srcset parsing (responsive images)
   const srcsetMatches = Array.from(
@@ -539,30 +655,34 @@ function extractWooCommerceImages(html: string, productJsonLd: any | null): stri
   srcsetMatches.forEach((m) => {
     const srcset = m[1];
     const urls = srcset.split(",").map((s) => s.trim().split(" ")[0]);
-    urls.forEach((url) => {
-      if (url.startsWith("http")) allUrls.add(url);
-    });
+    urls.forEach((url) => addUrl(url));
   });
 
   // Strategy 12: og:image
   const ogImage = extractMetaContent(html, "property", "og:image");
-  if (ogImage && ogImage.startsWith("http")) allUrls.add(ogImage);
+  if (ogImage) addUrl(ogImage);
 
   // Strategy 13: twitter:image
   const twImage = extractMetaContent(html, "name", "twitter:image");
-  if (twImage && twImage.startsWith("http")) allUrls.add(twImage);
+  if (twImage) addUrl(twImage);
 
   // Strategy 14: Any product-related img in the page (broad catch-all)
   const allImages = Array.from(
-    html.matchAll(/<img[^>]+(?:src|data-src)=["']([^"']+)["'][^>]*>/gi)
+    html.matchAll(/<img[^>]+(?:src|data-src|data-lazy-src)=["']([^"']+)["'][^>]*>/gi)
   );
   allImages.forEach((m) => {
     const url = decodeHtmlEntities(m[1]).trim();
     if (url.startsWith("http") && 
         (url.includes("wp-content") || url.includes("uploads") || url.includes("woocommerce"))) {
-      allUrls.add(url);
+      if (!isPlaceholder(url)) allUrls.add(url);
     }
   });
+
+  // Strategy 15: Direct scan for any image URL that might have been missed
+  const allImgUrls = Array.from(
+    html.matchAll(/https?:\/\/[^"'\s)]+\.(jpg|jpeg|png|webp)/gi)
+  );
+  allImgUrls.forEach((m) => addUrl(m[0]));
 
   return [...allUrls];
 }
@@ -731,23 +851,22 @@ function extractWooCommerceSpecifications(html: string, productJsonLd: any | nul
     }
   }
 
-// Clean up unwanted specification values
-const cleanedSpecs: Record<string, string> = {};
-
-for (const [key, value] of Object.entries(specs)) {
-  const cleaned = String(value)
-    .replace(/Simple Debugging/gi, "")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  if (cleaned) {
-    cleanedSpecs[key] = cleaned;
+  // Clean up any unwanted text fragments from specifications
+  const cleanedSpecs: Record<string, string> = {};
+  for (const [key, value] of Object.entries(specs)) {
+    // Remove "Simple Debugging", "Product Sale!", "Original price", and similar test artifacts
+    const cleaned = value
+      .replace(/Simple Debugging/gi, "")
+      .replace(/Product Sale![^.]*\./gi, "")
+      .replace(/Original price[^.]*\./gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (cleaned) {
+      cleanedSpecs[key] = cleaned;
+    }
   }
+  return cleanedSpecs;
 }
-
-return cleanedSpecs;
-}
-
 
 /**
  * Extract product categories from WooCommerce HTML.
@@ -858,6 +977,22 @@ function extractWooCommerceSku(html: string, productJsonLd: any | null): string 
 function extractWooCommerceVariants(html: string, basePrice: number): ProductVariant[] {
   const variants: ProductVariant[] = [];
 
+  // Helper to add variant (avoid duplicates)
+  const addVariant = (title: string, price: number, sku?: string) => {
+    if (!title || title.trim() === "") return;
+    const normalizedTitle = title.trim();
+    // Skip "Choose an option" etc.
+    if (/choose|select|—/.test(normalizedTitle.toLowerCase())) return;
+    // Check for duplicate by title (simple dedupe)
+    if (variants.some(v => v.title === normalizedTitle)) return;
+    variants.push({
+      id: sku || `wc-var-${variants.length}`,
+      title: normalizedTitle,
+      price: (!isNaN(price) && price > 0 ? price : basePrice).toFixed(2),
+      sku: sku || undefined,
+    });
+  };
+
   // Strategy 1: JSON-LD hasVariant
   const hasVariant = (html.match(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi) || [])
     .map((block) => {
@@ -875,42 +1010,28 @@ function extractWooCommerceVariants(html: string, basePrice: number): ProductVar
       const price = normalizePrice(String(v?.offers?.price || ""));
       const sku = normalizeText(v?.sku || "");
       if (name) {
-        variants.push({
-          id: sku || `wc-var-${variants.length}`,
-          title: name,
-          price: (!isNaN(price) && price > 0 ? price : basePrice).toFixed(2),
-          sku: sku || undefined,
-        });
+        addVariant(name, price, sku || undefined);
       }
     }
   }
 
-  // Strategy 2: WooCommerce variation form data
-  const variationForm = html.match(/class=["'][^"']*variations_form[^"']*["']/i);
-  if (variationForm) {
-    // Extract variation data from data-product_variations attribute
-    const varDataMatch = html.match(/data-product_variations=["']([^"']+)["']/i);
-    if (varDataMatch?.[1]) {
-      try {
-        const varData = JSON.parse(decodeHtmlEntities(varDataMatch[1]).replace(/&quot;/g, '"'));
-        if (Array.isArray(varData)) {
-          for (const v of varData) {
-            const attributes = v?.attributes || {};
-            const attrValues = Object.values(attributes).filter((a): a is string => typeof a === "string" && a.length > 0);
-            const title = attrValues.join(" / ") || `Variant ${variants.length + 1}`;
-            const price = normalizePrice(String(v?.display_price || v?.price_html || ""));
-            const sku = normalizeText(v?.sku || "");
-            variants.push({
-              id: sku || `wc-var-${variants.length}`,
-              title,
-              price: (!isNaN(price) && price > 0 ? price : basePrice).toFixed(2),
-              sku: sku || undefined,
-            });
-          }
+  // Strategy 2: WooCommerce variation form data (data-product_variations)
+  const varDataMatch = html.match(/data-product_variations=["']([^"']+)["']/i);
+  if (varDataMatch?.[1]) {
+    try {
+      const varData = JSON.parse(decodeHtmlEntities(varDataMatch[1]).replace(/&quot;/g, '"'));
+      if (Array.isArray(varData)) {
+        for (const v of varData) {
+          const attributes = v?.attributes || {};
+          const attrValues = Object.values(attributes).filter((a): a is string => typeof a === "string" && a.length > 0);
+          const title = attrValues.join(" / ") || `Variant ${variants.length + 1}`;
+          const price = normalizePrice(String(v?.display_price || v?.price_html || ""));
+          const sku = normalizeText(v?.sku || "");
+          addVariant(title, price, sku || undefined);
         }
-      } catch {
-        // JSON parse failed, continue to next strategy
       }
+    } catch {
+      // JSON parse failed, continue
     }
   }
 
@@ -919,19 +1040,13 @@ function extractWooCommerceVariants(html: string, basePrice: number): ProductVar
     html.matchAll(/class=["'][^"']*swatch[^"']*["'][^>]*data-value=["']([^"']+)["']/gi)
   );
   if (swatchMatches.length > 0) {
-    swatchMatches.forEach((m, idx) => {
+    swatchMatches.forEach((m) => {
       const value = decodeHtmlEntities(m[1]).trim();
-      if (value) {
-        variants.push({
-          id: `wc-swatch-${idx}`,
-          title: value,
-          price: basePrice.toFixed(2),
-        });
-      }
+      addVariant(value, basePrice);
     });
   }
 
-  // Strategy 4: Select dropdown options
+  // Strategy 4: Select dropdown options (WooCommerce attribute selects)
   const selectMatches = Array.from(
     html.matchAll(/<select[^>]+name=["']attribute[^"']*["'][^>]*>([\s\S]*?)<\/select>/gi)
   );
@@ -941,21 +1056,50 @@ function extractWooCommerceVariants(html: string, basePrice: number): ProductVar
       const value = opt[1].trim();
       const label = opt[2].trim();
       if (value && value !== "" && !label.toLowerCase().includes("choose")) {
-        variants.push({
-          id: `wc-opt-${variants.length}`,
-          title: label,
-          price: basePrice.toFixed(2),
-        });
+        addVariant(label, basePrice);
       }
     }
   }
 
+  // Strategy 5: Fallback – try to extract from simple selectors (e.g., variations without data-product_variations)
+  const simpleSelects = Array.from(
+    html.matchAll(/<select[^>]+id=["'][^"']*(?:variation|pa_|attribute)[^"']*["'][^>]*>([\s\S]*?)<\/select>/gi)
+  );
+  for (const select of simpleSelects) {
+    const options = Array.from(select[1].matchAll(/<option[^>]*value=["']([^"']+)["'][^>]*>([^<]+)<\/option>/gi));
+    for (const opt of options) {
+      const value = opt[1].trim();
+      const label = opt[2].trim();
+      if (value && value !== "" && !label.toLowerCase().includes("choose")) {
+        addVariant(label, basePrice);
+      }
+    }
+  }
+
+  // Strategy 6: Try to extract from radio buttons or checkbox variations (rare)
+  const radioMatches = Array.from(
+    html.matchAll(/<input[^>]+type=["']radio["'][^>]+value=["']([^"']+)["'][^>]*>/gi)
+  );
+  const radioLabels = Array.from(
+    html.matchAll(/<label[^>]+for=["']([^"']+)["'][^>]*>([^<]+)<\/label>/gi)
+  );
+  const radioValues = new Set<string>();
+  radioMatches.forEach((m) => {
+    const val = decodeHtmlEntities(m[1]).trim();
+    if (val && !radioValues.has(val)) {
+      radioValues.add(val);
+      addVariant(val, basePrice);
+    }
+  });
+
+  // If we still have no variants, create a default one
   return variants.length > 0 ? variants : [{
-  id: "wc-default",
-  title: "Default",
-  price: (basePrice > 0 ? basePrice : 1.00).toFixed(2),
-}];
-}  
+    id: "wc-default",
+    title: "Default",
+    price: (basePrice > 0 ? basePrice : 0.00).toFixed(2),
+  }];
+}
+
 /**
  * Detect anti-bot / challenge pages on WooCommerce sites.
  */
@@ -1020,39 +1164,158 @@ export class WooCommerceExtractor extends BaseExtractor {
     // 3. Extract JSON-LD first (most reliable structured data)
     const productJsonLd = findProductJsonLd(html);
 
-    // 4. Extract all product fields
-    const title = extractWooCommerceTitle(html, productJsonLd);
+    // 3.5 Try WooCommerce Store API first (Layer 1)
+    const domain = new URL(url).hostname.replace(/^www\./, "");
+    const productId = extractProductIdFromUrl(url);
+    let apiProduct: WooCommerceStoreProduct | null = null;
+    if (domain) {
+      apiProduct = await fetchWooCommerceStoreAPI(domain, productId || undefined);
+      if (apiProduct) {
+        console.log(`[WooCommerceExtractor] Successfully fetched product from Store API: ${apiProduct.name}`);
+      }
+    }
+
+    // 4. Extract all product fields (with API data as priority)
+    const title = apiProduct?.name || extractWooCommerceTitle(html, productJsonLd);
     if (!title || title.length < 3) {
       throw new Error(`WooCommerce extraction failed: missing product title for ${url}.`);
     }
 
-    const gallery = extractWooCommerceImages(html, productJsonLd);
-    if (gallery.length === 0) {
-      throw new Error(`WooCommerce extraction failed: missing product images for ${url}.`);
+    // Price extraction: API > JSON-LD > HTML
+    let priceData: { amount: number; raw: string; currency: string } | null = null;
+    let compareAtPrice: number | undefined = undefined;
+    
+    // Layer 1: Store API
+    if (apiProduct) {
+      const priceStr = apiProduct.sale_price || apiProduct.price || apiProduct.regular_price;
+      if (priceStr) {
+        const amount = normalizePrice(priceStr);
+        if (!isNaN(amount) && amount > 0) {
+          priceData = {
+            amount,
+            raw: priceStr,
+            currency: apiProduct.currency || detectCurrency(priceStr) || "USD",
+          };
+          // Compare at price from API
+          if (apiProduct.regular_price && apiProduct.sale_price) {
+            const compareAmount = normalizePrice(apiProduct.regular_price);
+            if (!isNaN(compareAmount) && compareAmount > amount) {
+              compareAtPrice = compareAmount;
+            }
+          }
+        }
+      }
     }
-
-    const priceData = extractWooCommercePrice(html, productJsonLd);
+    
+    // Layer 2: JSON-LD (if API failed)
+    if (!priceData) {
+      priceData = extractWooCommercePrice(html, productJsonLd);
+    }
+    
+    // Layer 3: HTML Parsing (if JSON-LD failed)
+    if (!priceData) {
+      priceData = extractWooCommercePrice(html, null);
+    }
+    
     if (!priceData) {
       throw new Error(`WooCommerce extraction failed: missing product price for ${url}.`);
     }
 
-    const compareAtPrice = extractCompareAtPrice(html, productJsonLd);
-    const description = extractWooCommerceDescription(html, productJsonLd);
+    // If compareAtPrice is still undefined, try HTML extraction
+    if (compareAtPrice === undefined) {
+      compareAtPrice = extractCompareAtPrice(html, productJsonLd);
+    }
+
+    // Images extraction: API > JSON-LD > HTML
+    let gallery: string[] = [];
+    let mainImage = "";
+    
+    // Layer 1: Store API images
+    if (apiProduct?.images && apiProduct.images.length > 0) {
+      gallery = apiProduct.images.map(img => img.src).filter(Boolean);
+      mainImage = gallery[0] || "";
+      console.log(`[WooCommerceExtractor] Extracted ${gallery.length} images from Store API`);
+    }
+    
+    // Layer 2: HTML extraction (if API had no images)
+    if (gallery.length === 0) {
+      gallery = extractWooCommerceImages(html, productJsonLd);
+      mainImage = gallery[0] || "";
+    }
+    
+    if (gallery.length === 0) {
+      throw new Error(`WooCommerce extraction failed: missing product images for ${url}.`);
+    }
+
+    // Description extraction: API > JSON-LD > HTML
+    let description = "";
+    
+    // Layer 1: Store API description
+    if (apiProduct) {
+      description = apiProduct.description || apiProduct.short_description || "";
+      if (description) {
+        description = stripTags(description);
+        console.log(`[WooCommerceExtractor] Extracted description from Store API (${description.length} chars)`);
+      }
+    }
+    
+    // Layer 2: HTML extraction (if API had no description)
+    if (!description || description.length < 10) {
+      description = extractWooCommerceDescription(html, productJsonLd);
+    }
+    
     if (!description || description.length < 10) {
       throw new Error(`WooCommerce extraction failed: missing product description for ${url}.`);
     }
 
     const shortDescription = extractWooCommerceShortDescription(html);
-    const vendor = extractWooCommerceVendor(html, productJsonLd) || new URL(url).hostname.replace(/^www\./, "");
+    
+    // Vendor extraction: API categories/tags > JSON-LD > HTML
+    let vendor = "";
+    
+    // Layer 1: Store API categories or store name
+    if (apiProduct?.categories && apiProduct.categories.length > 0) {
+      vendor = apiProduct.categories[0].name;
+    } else if (apiProduct?.tags && apiProduct.tags.length > 0) {
+      vendor = apiProduct.tags[0].name;
+    }
+    
+    // Layer 2: HTML extraction (if API had no vendor)
+    if (!vendor) {
+      vendor = extractWooCommerceVendor(html, productJsonLd) || new URL(url).hostname.replace(/^www\./, "");
+    }
+
     const sku = extractWooCommerceSku(html, productJsonLd);
     const categories = extractWooCommerceCategories(html);
     const specifications = extractWooCommerceSpecifications(html, productJsonLd);
-    const variants = extractWooCommerceVariants(html, priceData.amount);
+    
+    // Variants extraction: API > JSON-LD > HTML
+    let variants: ProductVariant[] = [];
+    
+    // Layer 1: Store API variations
+    if (apiProduct?.variations && apiProduct.variations.length > 0) {
+      variants = apiProduct.variations.map((v) => {
+        const attrNames = v.attributes.map(a => a.option).filter(Boolean).join(" / ");
+        const price = normalizePrice(v.sale_price || v.price || v.regular_price || "");
+        return {
+          id: String(v.id),
+          title: attrNames || `Variant ${v.id}`,
+          price: (!isNaN(price) && price > 0 ? price : priceData.amount).toFixed(2),
+          sku: undefined,
+        };
+      });
+      console.log(`[WooCommerceExtractor] Extracted ${variants.length} variants from Store API`);
+    }
+    
+    // Layer 2: HTML extraction (if API had no variants)
+    if (variants.length === 0) {
+      variants = extractWooCommerceVariants(html, priceData.amount);
+    }
 
     const product: NormalizedProduct = {
       title,
       description: shortDescription || description,
-      images: gallery[0],
+      images: mainImage,
       gallery,
       variants,
       specifications: {
