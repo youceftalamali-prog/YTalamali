@@ -731,8 +731,23 @@ function extractWooCommerceSpecifications(html: string, productJsonLd: any | nul
     }
   }
 
-  return specs;
+// Clean up unwanted specification values
+const cleanedSpecs: Record<string, string> = {};
+
+for (const [key, value] of Object.entries(specs)) {
+  const cleaned = String(value)
+    .replace(/Simple Debugging/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (cleaned) {
+    cleanedSpecs[key] = cleaned;
+  }
 }
+
+return cleanedSpecs;
+}
+
 
 /**
  * Extract product categories from WooCommerce HTML.
