@@ -896,12 +896,10 @@ function extractWooCommerceVariants(html: string, basePrice: number): ProductVar
   }
 
   return variants.length > 0 ? variants : [{
-    id: "wc-default",
-    title: "Default",
-    price: basePrice.toFixed(2),
-  }];
-}
-
+  id: "wc-default",
+  title: "Default",
+  price: (basePrice > 0 ? basePrice : 1.00).toFixed(2),
+}];
 /**
  * Detect anti-bot / challenge pages on WooCommerce sites.
  */
