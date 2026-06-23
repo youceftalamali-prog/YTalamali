@@ -940,6 +940,7 @@ function extractWooCommerceVariants(html: string, basePrice: number): ProductVar
   title: "Default",
   price: (basePrice > 0 ? basePrice : 1.00).toFixed(2),
 }];
+}  
 /**
  * Detect anti-bot / challenge pages on WooCommerce sites.
  */
