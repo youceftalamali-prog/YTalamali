@@ -346,6 +346,46 @@ function extractWooCommercePrice(html: string, productJsonLd: any | null): {
     }
   }
 
+    // Strategy 9: itemprop="price"
+  const itempropPrice = html.match(/<[^>]+itemprop=["']price["'][^>]*>([\s\S]*?)<\/[^>]+>/i);
+  if (itempropPrice) {
+    const raw = stripTags(itempropPrice[1]);
+    const amount = normalizePrice(raw);
+    if (!isNaN(amount) && amount > 0) {
+      return { amount, raw, currency: detectCurrency(raw) };
+    }
+  }
+
+  // Strategy 10: bdi containing price
+  const bdiMatch = html.match(/<bdi[^>]*>([^<]+)<\/bdi>/i);
+  if (bdiMatch) {
+    const raw = bdiMatch[1].trim();
+    const amount = normalizePrice(raw);
+    if (!isNaN(amount) && amount > 0) {
+      return { amount, raw, currency: detectCurrency(raw) };
+    }
+  }
+
+  // Strategy 11: woocommerce-Price-amount
+  const wooPriceAmount = html.match(/<[^>]+class=["'][^"']*woocommerce-Price-amount[^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/i);
+  if (wooPriceAmount) {
+    const raw = stripTags(wooPriceAmount[1]);
+    const amount = normalizePrice(raw);
+    if (!isNaN(amount) && amount > 0) {
+      return { amount, raw, currency: detectCurrency(raw) };
+    }
+  }
+
+  // Strategy 12: span.amount
+  const amountSpan = html.match(/<span[^>]+class=["'][^"']*amount[^"']*["'][^>]*>([\s\S]*?)<\/span>/i);
+  if (amountSpan) {
+    const raw = stripTags(amountSpan[1]);
+    const amount = normalizePrice(raw);
+    if (!isNaN(amount) && amount > 0) {
+      return { amount, raw, currency: detectCurrency(raw) };
+    }
+  }
+
   return null;
 }
 
