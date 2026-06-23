@@ -112,6 +112,25 @@ function parseJsonSafe<T = unknown>(input: string): T | null {
   }
 }
 
+// Helper to filter out technical/plugin names for vendor
+function isExcludedVendorName(name: string): boolean {
+  if (!name) return true;
+  const excludePatterns = [
+    /klaviyo/i,
+    /reviews/i,
+    /widget/i,
+    /plugin/i,
+    /app/i,
+    /exclude/i,
+    /test/i,
+    /demo/i,
+    /sample/i,
+    /api/i,
+    /webhook/i,
+  ];
+  return excludePatterns.some(pattern => pattern.test(name));
+}
+
 // ─── Retry + Timeout Helper ──────────────────────────────────────────────────
 
 async function fetchWithRetry(url: string, headers: Record<string, string>, attempt = 1): Promise<Response> {
@@ -360,7 +379,7 @@ function extractWooCommerceTitle(html: string, productJsonLd: any | null): strin
 
 /**
  * Extract price and compare-at price from WooCommerce HTML.
- * WooCommerce stores prices in various formats across themes.
+ * Prioritizes sale price and lowest price among candidates.
  */
 function extractWooCommercePrice(html: string, productJsonLd: any | null): {
   amount: number;
@@ -368,16 +387,45 @@ function extractWooCommercePrice(html: string, productJsonLd: any | null): {
   raw: string;
   currency: string;
 } | null {
-  // Strategy 1: JSON-LD offers (most reliable)
+  // Strategy 1: JSON-LD offers (most reliable) - with sale price priority
   const offers = productJsonLd?.offers;
   const offerCandidates = Array.isArray(offers) ? offers : offers ? [offers] : [];
+  
+  // First pass: collect all valid prices with their context
+  const priceCandidates: Array<{ amount: number; raw: string; currency: string; isSale: boolean; priority: number }> = [];
+  
   for (const offer of offerCandidates) {
-    const raw = String(offer?.price ?? "").trim();
-    const amount = normalizePrice(raw);
-    if (raw && !isNaN(amount) && amount > 0) {
-      const currency = String(offer?.priceCurrency || detectCurrency(raw)).trim();
-      return { amount, raw, currency: currency || "USD" };
+    // Check for sale price first
+    const saleRaw = String(offer?.salePrice ?? offer?.priceSpecification?.salePrice ?? "").trim();
+    const regularRaw = String(offer?.price ?? offer?.priceSpecification?.price ?? "").trim();
+    
+    if (saleRaw) {
+      const amount = normalizePrice(saleRaw);
+      if (!isNaN(amount) && amount > 0) {
+        const currency = String(offer?.priceCurrency || detectCurrency(saleRaw)).trim();
+        priceCandidates.push({ amount, raw: saleRaw, currency: currency || "USD", isSale: true, priority: 1 });
+      }
     }
+    
+    if (regularRaw) {
+      const amount = normalizePrice(regularRaw);
+      if (!isNaN(amount) && amount > 0) {
+        const currency = String(offer?.priceCurrency || detectCurrency(regularRaw)).trim();
+        priceCandidates.push({ amount, raw: regularRaw, currency: currency || "USD", isSale: false, priority: 2 });
+      }
+    }
+  }
+  
+  // If we have candidates, pick the best one (sale price > regular price, or lowest price)
+  if (priceCandidates.length > 0) {
+    // Prefer sale price, then lowest price
+    const sorted = priceCandidates.sort((a, b) => {
+      if (a.isSale && !b.isSale) return -1;
+      if (!a.isSale && b.isSale) return 1;
+      return a.amount - b.amount;
+    });
+    const best = sorted[0];
+    return { amount: best.amount, raw: best.raw, currency: best.currency };
   }
 
   // Strategy 2: Standard WooCommerce price classes
@@ -390,6 +438,9 @@ function extractWooCommercePrice(html: string, productJsonLd: any | null): {
     "current-price",
   ];
 
+  let bestPrice: { amount: number; raw: string; currency: string } | null = null;
+  let bestIsSale = false;
+
   for (const cls of priceSelectors) {
     const pattern = new RegExp(
       `class=["'][^"']*${escapeRegex(cls)}[^"']*["'][^>]*>([\s\S]{0,300}?)<\/[^>]+>`,
@@ -400,9 +451,17 @@ function extractWooCommercePrice(html: string, productJsonLd: any | null): {
       const raw = stripTags(match[1]);
       const amount = normalizePrice(raw);
       if (!isNaN(amount) && amount > 0) {
-        return { amount, raw, currency: detectCurrency(raw) };
+        const isSale = cls === "sale-price" || cls === "current-price";
+        if (!bestPrice || (isSale && !bestIsSale) || (amount < bestPrice.amount)) {
+          bestPrice = { amount, raw, currency: detectCurrency(raw) };
+          bestIsSale = isSale;
+        }
       }
     }
+  }
+
+  if (bestPrice) {
+    return bestPrice;
   }
 
   // Strategy 3: WooCommerce specific price HTML structure
@@ -907,39 +966,46 @@ function extractWooCommerceCategories(html: string): string[] {
 }
 
 /**
- * Extract brand/vendor from WooCommerce HTML.
+ * Extract brand/vendor from WooCommerce HTML, filtering out technical/plugin names.
  */
 function extractWooCommerceVendor(html: string, productJsonLd: any | null): string {
-  // Strategy 1: JSON-LD brand
+  // Strategy 1: JSON-LD brand (filter excluded)
   const brand = productJsonLd?.brand;
   if (brand) {
     const name = typeof brand === "string" ? brand : brand?.name || "";
-    if (name && name.length >= 2) return name;
+    if (name && name.length >= 2 && !isExcludedVendorName(name)) return name;
   }
 
-  // Strategy 2: JSON-LD manufacturer
+  // Strategy 2: JSON-LD manufacturer (filter excluded)
   const manufacturer = productJsonLd?.manufacturer;
   if (manufacturer) {
     const name = typeof manufacturer === "string" ? manufacturer : manufacturer?.name || "";
-    if (name && name.length >= 2) return name;
+    if (name && name.length >= 2 && !isExcludedVendorName(name)) return name;
   }
 
-  // Strategy 3: Store/site name from meta
+  // Strategy 3: Store/site name from meta (most reliable for real store names)
   const siteName = extractMetaContent(html, "property", "og:site_name");
-  if (siteName && siteName.length >= 2) return siteName;
+  if (siteName && siteName.length >= 2 && !isExcludedVendorName(siteName)) return siteName;
 
   // Strategy 4: Store name from header
   const storeMatch = html.match(/class=["'][^"']*site-title[^"']*["'][^>]*>([^<]+)<\/[^>]+>/i);
   if (storeMatch?.[1]) {
     const name = stripTags(storeMatch[1]).trim();
-    if (name.length >= 2) return name;
+    if (name && name.length >= 2 && !isExcludedVendorName(name)) return name;
   }
 
   // Strategy 5: Shop name
   const shopMatch = html.match(/class=["'][^"']*shop-name[^"']*["'][^>]*>([^<]+)<\/[^>]+>/i);
   if (shopMatch?.[1]) {
     const name = stripTags(shopMatch[1]).trim();
-    if (name.length >= 2) return name;
+    if (name && name.length >= 2 && !isExcludedVendorName(name)) return name;
+  }
+
+  // Strategy 6: Fallback to domain (but clean it up)
+  const domainMatch = html.match(/<link[^>]+rel=["'](?:canonical|home)["'][^>]+href=["']https?:\/\/([^\/]+)/i);
+  if (domainMatch?.[1]) {
+    const domain = domainMatch[1].replace(/^www\./, "").split(".")[0];
+    if (domain && domain.length >= 2 && !isExcludedVendorName(domain)) return domain;
   }
 
   return "";
@@ -1022,16 +1088,20 @@ function extractWooCommerceVariants(html: string, basePrice: number): ProductVar
       const varData = JSON.parse(decodeHtmlEntities(varDataMatch[1]).replace(/&quot;/g, '"'));
       if (Array.isArray(varData)) {
         for (const v of varData) {
-          const attributes = v?.attributes || {};
-          const attrValues = Object.values(attributes).filter((a): a is string => typeof a === "string" && a.length > 0);
-          const title = attrValues.join(" / ") || `Variant ${variants.length + 1}`;
-          const price = normalizePrice(String(v?.display_price || v?.price_html || ""));
+          // Extract attributes properly - they may be in attributes or variation_attributes
+          const attributes = v?.attributes || v?.variation_attributes || {};
+          // Get attribute values, ensuring we get the actual option names
+          const attrValues = Object.values(attributes)
+            .filter((a): a is string => typeof a === "string" && a.length > 0)
+            .map(a => decodeHtmlEntities(a));
+          const title = attrValues.join(" / ") || v?.name || `Variant ${variants.length + 1}`;
+          const price = normalizePrice(String(v?.display_price || v?.price_html || v?.price || ""));
           const sku = normalizeText(v?.sku || "");
           addVariant(title, price, sku || undefined);
         }
       }
-    } catch {
-      // JSON parse failed, continue
+    } catch (err) {
+      console.warn(`[WooCommerceExtractor] Failed to parse data-product_variations:`, err);
     }
   }
 
@@ -1270,19 +1340,33 @@ export class WooCommerceExtractor extends BaseExtractor {
 
     const shortDescription = extractWooCommerceShortDescription(html);
     
-    // Vendor extraction: API categories/tags > JSON-LD > HTML
+    // Vendor extraction: API categories/tags > JSON-LD > HTML with filtering
     let vendor = "";
     
-    // Layer 1: Store API categories or store name
+    // Layer 1: Store API categories or store name (filter excluded)
     if (apiProduct?.categories && apiProduct.categories.length > 0) {
-      vendor = apiProduct.categories[0].name;
-    } else if (apiProduct?.tags && apiProduct.tags.length > 0) {
-      vendor = apiProduct.tags[0].name;
+      const catName = apiProduct.categories[0].name;
+      if (catName && !isExcludedVendorName(catName)) {
+        vendor = catName;
+      }
+    }
+    
+    if (!vendor && apiProduct?.tags && apiProduct.tags.length > 0) {
+      const tagName = apiProduct.tags[0].name;
+      if (tagName && !isExcludedVendorName(tagName)) {
+        vendor = tagName;
+      }
     }
     
     // Layer 2: HTML extraction (if API had no vendor)
     if (!vendor) {
-      vendor = extractWooCommerceVendor(html, productJsonLd) || new URL(url).hostname.replace(/^www\./, "");
+      vendor = extractWooCommerceVendor(html, productJsonLd);
+    }
+    
+    // Layer 3: Final fallback to domain (cleaned)
+    if (!vendor || isExcludedVendorName(vendor)) {
+      const domain = new URL(url).hostname.replace(/^www\./, "");
+      vendor = domain.split(".")[0] || domain;
     }
 
     const sku = extractWooCommerceSku(html, productJsonLd);
@@ -1295,11 +1379,24 @@ export class WooCommerceExtractor extends BaseExtractor {
     // Layer 1: Store API variations
     if (apiProduct?.variations && apiProduct.variations.length > 0) {
       variants = apiProduct.variations.map((v) => {
-        const attrNames = v.attributes.map(a => a.option).filter(Boolean).join(" / ");
+        // Extract attribute names from the variation's attributes
+        let attrNames = v.attributes.map(a => a.option).filter(Boolean).join(" / ");
+        
+        // If no attributes found, try to extract from the variation's name or id
+        if (!attrNames) {
+          // Some stores store attribute names in the variation name
+          const varName = (v as any).name || (v as any).title || "";
+          if (varName) {
+            attrNames = varName;
+          } else {
+            attrNames = `Variant ${v.id}`;
+          }
+        }
+        
         const price = normalizePrice(v.sale_price || v.price || v.regular_price || "");
         return {
           id: String(v.id),
-          title: attrNames || `Variant ${v.id}`,
+          title: attrNames,
           price: (!isNaN(price) && price > 0 ? price : priceData.amount).toFixed(2),
           sku: undefined,
         };
