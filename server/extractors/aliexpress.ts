@@ -3,7 +3,7 @@ import { BaseExtractor } from "./base.ts";
 import { NormalizedProduct, ProductVariant } from "../../src/types.ts";
 import { TEST_DATASET } from "./test-dataset.ts";
 
-// ─── Cloud Run / Network Compatibility ───────────────────────────────────────
+// ─── Constants ──────────────────────────────────────────────────────────────
 const FETCH_TIMEOUT_MS = 30_000;
 const MAX_RETRIES = 5;
 const INITIAL_BACKOFF_MS = 1_500;
@@ -11,12 +11,12 @@ const BACKOFF_MULTIPLIER = 2.0;
 const MAX_BACKOFF_MS = 20_000;
 const RANDOM_JITTER_MIN = 500;
 const RANDOM_JITTER_MAX = 3_000;
-
 const PLACEHOLDER_IMAGE = "https://via.placeholder.com/1200x1200?text=AliExpress+Product";
 
-// ─── Original Helpers (PRESERVED) ────────────────────────────────────────────
+// ─── Helpers ────────────────────────────────────────────────────────────────
 
 function decodeHtmlEntities(input: string): string {
+  if (!input) return "";
   return input
     .replace(/&quot;/g, '"')
     .replace(/&#34;/g, '"')
@@ -29,6 +29,7 @@ function decodeHtmlEntities(input: string): string {
 }
 
 function stripTags(input: string): string {
+  if (!input) return "";
   return decodeHtmlEntities(input)
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
@@ -37,7 +38,7 @@ function stripTags(input: string): string {
     .trim();
 }
 
-function parseJsonSafe<T = any>(input: string): T | null {
+function safeJsonParse<T = any>(input: string): T | null {
   try {
     return JSON.parse(input) as T;
   } catch {
@@ -45,49 +46,62 @@ function parseJsonSafe<T = any>(input: string): T | null {
   }
 }
 
+function parseJsonSafe<T = any>(input: string): T | null {
+  return safeJsonParse<T>(input);
+}
+
 function normalizeImageUrl(input: string): string {
-  const value = decodeHtmlEntities(String(input || "")).trim();
+  if (!input) return "";
+  const value = decodeHtmlEntities(String(input)).trim();
   if (!value) return "";
   if (value.startsWith("//")) return `https:${value}`;
   return value;
 }
 
 function normalizeText(input: unknown): string {
-  return decodeHtmlEntities(String(input || "")).replace(/\s+/g, " ").trim();
+  if (input == null) return "";
+  return decodeHtmlEntities(String(input)).replace(/\s+/g, " ").trim();
 }
 
 function normalizePrice(input: string): number {
-  const match = normalizeText(input).replace(/,/g, "").match(/(\d+(?:\.\d+)?)/);
+  const cleaned = normalizeText(input).replace(/,/g, "").replace(/[^\d.]/g, "");
+  const match = cleaned.match(/(\d+(?:\.\d+)?)/);
   return match ? parseFloat(match[1]) : NaN;
-}
-
-function parseAliPromotionInfo(input: unknown): Record<string, any> {
-  const text = normalizeText(input);
-  if (!text) return {};
-  return parseJsonSafe<Record<string, any>>(text) || {};
 }
 
 function detectCurrency(input: string): string {
   const value = normalizeText(input);
-  if (/\bMYR\b/i.test(value) || value.includes("RM")) return "MYR";
-  if (/\bUSD\b/i.test(value) || value.includes("$")) return "USD";
+  if (/\bUSD\b/i.test(value) || /^\$/.test(value) || /\$\s*\d/.test(value)) return "USD";
   if (/\bEUR\b/i.test(value) || value.includes("€")) return "EUR";
   if (/\bGBP\b/i.test(value) || value.includes("£")) return "GBP";
-  if (/\bJPY\b/i.test(value) || value.includes("¥")) return "JPY";
+  if (/\bCNY\b/i.test(value) || /\bRMB\b/i.test(value) || value.includes("¥")) return "CNY";
+  if (/\bJPY\b/i.test(value)) return "JPY";
+  if (/\bMYR\b/i.test(value) || value.includes("RM")) return "MYR";
   return "USD";
 }
 
 function cleanupTitle(input: string): string {
   return normalizeText(input)
-    .replace(/\s*-\s*AliExpress.*$/i, "")
-    .replace(/\s*\|\s*AliExpress.*$/i, "")
+    .replace(/\s*[-|]\s*AliExpress.*$/i, "")
+    .replace(/\s*[-|]\s*Aliexpress.*$/i, "")
     .trim();
 }
 
 function extractProductId(url: string): string {
   const cleanUrl = url.split("?")[0].split("#")[0];
-  const match = cleanUrl.match(/\/item\/(\d+)\.html/i) || cleanUrl.match(/(\d{8,})/);
-  return match?.[1] || "";
+  // Support /item/, /i/, /product/, /p/, and raw numeric IDs
+  const patterns = [
+    /\/item\/(\d+)\.html/i,
+    /\/i\/(\d+)/i,
+    /\/product\/(\d+)/i,
+    /\/p\/(\d+)/i,
+    /\/(\d{8,})(?:\.html|\/|$)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = cleanUrl.match(pattern);
+    if (match?.[1]) return match[1];
+  }
+  return "";
 }
 
 function parseJsonpPayload<T = any>(input: string): T | null {
@@ -110,7 +124,7 @@ function flattenPreContent(preContent: any): string {
         data.desc,
         data.value,
       ]
-        .map((value) => normalizeText(value))
+        .map((v) => normalizeText(v))
         .filter(Boolean)
         .join(" ");
     })
@@ -119,8 +133,35 @@ function flattenPreContent(preContent: any): string {
 }
 
 function extractMetaContent(html: string, key: string): string {
-  const pattern = new RegExp(`<meta[^>]+(?:name|property)=["']${key}["'][^>]+content=["']([^"']+)`, "i");
-  return normalizeText((html.match(pattern) || [])[1] || "");
+  if (!html) return "";
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(
+    `<meta[^>]+(?:name|property)=["']${escapedKey}["'][^>]+content=["']([^"']+)`,
+    "i"
+  );
+  const match = html.match(pattern);
+  return match ? normalizeText(match[1]) : "";
+}
+
+function detectAliExpressAntiBot(html: string): string | null {
+  const checks: Array<[RegExp, string]> = [
+    [/captcha/i, "AliExpress captcha verification page detected."],
+    [/robot check/i, "AliExpress robot check page detected."],
+    [/security verification/i, "AliExpress security verification page detected."],
+    [/access denied/i, "AliExpress access denied page detected."],
+    [/challenge platform/i, "Cloudflare challenge page detected."],
+    [/cf-browser-verification/i, "Cloudflare browser verification detected."],
+    [/just a moment/i, "Cloudflare \"Just a Moment\" interstitial detected."],
+    [/bot detection/i, "AliExpress bot detection triggered."],
+    [/slide to verify/i, "AliExpress slide verification detected."],
+    [/verify you are human/i, "AliExpress human verification page detected."],
+  ];
+  for (const [pattern, message] of checks) {
+    if (pattern.test(html)) {
+      return message;
+    }
+  }
+  return null;
 }
 
 function detectAliExpressPageError(html: string, title: string): string | null {
@@ -134,12 +175,14 @@ function detectAliExpressPageError(html: string, title: string): string | null {
   return null;
 }
 
+// ─── Price Helpers ─────────────────────────────────────────────────────────
+
 function getAliSelectedSkuId(result: any): string {
   return String(
-    result?.SKU?.selectedSkuIdStr
-    || result?.SKU?.selectedSkuId
-    || result?.PRICE?.selectedSkuId
-    || ""
+    result?.SKU?.selectedSkuIdStr ||
+    result?.SKU?.selectedSkuId ||
+    result?.PRICE?.selectedSkuId ||
+    ""
   ).trim();
 }
 
@@ -148,23 +191,23 @@ function getAliSelectedPriceInfo(result: any): any {
   if (!selectedSkuId) {
     return result?.PRICE?.targetSkuPriceInfo || {};
   }
-
   return (
-    result?.PRICE?.skuIdStrPriceInfoMap?.[selectedSkuId]
-    || result?.PRICE?.skuPriceInfoMap?.[selectedSkuId]
-    || result?.PRICE?.skuPriceInfoMap?.[String(selectedSkuId)]
-    || result?.PRICE?.targetSkuPriceInfo
-    || {}
+    result?.PRICE?.skuIdStrPriceInfoMap?.[selectedSkuId] ||
+    result?.PRICE?.skuPriceInfoMap?.[selectedSkuId] ||
+    result?.PRICE?.skuPriceInfoMap?.[String(selectedSkuId)] ||
+    result?.PRICE?.targetSkuPriceInfo ||
+    {}
   );
 }
 
 function shouldPreferRegularPrice(result: any, selectedPriceInfo: any, salePrice: number, regularPrice: number): boolean {
-  const promotionInfo = parseAliPromotionInfo(result?.GLOBAL_DATA?.globalData?.curPagePriceInfo?.promotionInfo);
+  const promotionInfo = safeJsonParse(
+    result?.GLOBAL_DATA?.globalData?.curPagePriceInfo?.promotionInfo || "{}"
+  ) || {};
   const hasNewUserPromotion =
-    result?.PERSONAL_INFORMATION_SECURITY?.features?.newUser === true
-    || Object.keys(promotionInfo).some((key) => /new.?user/i.test(key))
-    || /new.?user/i.test(normalizeText(JSON.stringify(promotionInfo)));
-
+    result?.PERSONAL_INFORMATION_SECURITY?.features?.newUser === true ||
+    Object.keys(promotionInfo).some((key) => /new.?user/i.test(key)) ||
+    /new.?user/i.test(normalizeText(JSON.stringify(promotionInfo)));
   if (!hasNewUserPromotion) return false;
   if (isNaN(salePrice) || isNaN(regularPrice)) return false;
   if (salePrice <= 0.99) return true;
@@ -178,34 +221,40 @@ function resolveAliPrice(result: any, pageHtml: string): {
 } {
   const selectedPriceInfo = getAliSelectedPriceInfo(result);
   const targetPriceInfo = result?.PRICE?.targetSkuPriceInfo || {};
-  const firstPriceInfo = Object.values(result?.PRICE?.skuIdStrPriceInfoMap || result?.PRICE?.skuPriceInfoMap || {})[0] as any;
+  const firstPriceInfo = Object.values(
+    result?.PRICE?.skuIdStrPriceInfoMap || result?.PRICE?.skuPriceInfoMap || {}
+  )[0] as any;
 
   const selectedSalePriceText = normalizeText(
-    selectedPriceInfo?.salePriceString
-    || selectedPriceInfo?.salePriceLocal
-    || selectedPriceInfo?.activityAmount?.formatedAmount
-    || selectedPriceInfo?.skuActivityAmount?.formatedAmount
-    || ""
+    selectedPriceInfo?.salePriceString ||
+    selectedPriceInfo?.salePriceLocal ||
+    selectedPriceInfo?.activityAmount?.formatedAmount ||
+    selectedPriceInfo?.skuActivityAmount?.formatedAmount ||
+    ""
   );
   const selectedRegularPriceText = normalizeText(
     selectedPriceInfo?.originalPrice?.formatedAmount || ""
   );
   const targetSalePriceText = normalizeText(
-    targetPriceInfo?.salePriceString
-    || targetPriceInfo?.salePriceLocal
-    || targetPriceInfo?.activityAmount?.formatedAmount
-    || targetPriceInfo?.skuActivityAmount?.formatedAmount
-    || ""
+    targetPriceInfo?.salePriceString ||
+    targetPriceInfo?.salePriceLocal ||
+    targetPriceInfo?.activityAmount?.formatedAmount ||
+    targetPriceInfo?.skuActivityAmount?.formatedAmount ||
+    ""
   );
-  const targetRegularPriceText = normalizeText(targetPriceInfo?.originalPrice?.formatedAmount || "");
+  const targetRegularPriceText = normalizeText(
+    targetPriceInfo?.originalPrice?.formatedAmount || ""
+  );
   const firstSalePriceText = normalizeText(
-    firstPriceInfo?.salePriceString
-    || firstPriceInfo?.salePriceLocal
-    || firstPriceInfo?.activityAmount?.formatedAmount
-    || firstPriceInfo?.skuActivityAmount?.formatedAmount
-    || ""
+    firstPriceInfo?.salePriceString ||
+    firstPriceInfo?.salePriceLocal ||
+    firstPriceInfo?.activityAmount?.formatedAmount ||
+    firstPriceInfo?.skuActivityAmount?.formatedAmount ||
+    ""
   );
-  const firstRegularPriceText = normalizeText(firstPriceInfo?.originalPrice?.formatedAmount || "");
+  const firstRegularPriceText = normalizeText(
+    firstPriceInfo?.originalPrice?.formatedAmount || ""
+  );
 
   const selectedSalePrice = normalizePrice(selectedSalePriceText);
   const selectedRegularPrice = normalizePrice(selectedRegularPriceText);
@@ -216,30 +265,29 @@ function resolveAliPrice(result: any, pageHtml: string): {
 
   const preferredPriceText = shouldPreferRegularPrice(result, selectedPriceInfo, selectedSalePrice, selectedRegularPrice)
     ? selectedRegularPriceText
-    : (
-      selectedSalePriceText
-      || targetSalePriceText
-      || firstSalePriceText
-      || selectedRegularPriceText
-      || targetRegularPriceText
-      || firstRegularPriceText
-      || extractMetaContent(pageHtml, "og:price:amount")
-    );
+    : (selectedSalePriceText ||
+       targetSalePriceText ||
+       firstSalePriceText ||
+       selectedRegularPriceText ||
+       targetRegularPriceText ||
+       firstRegularPriceText ||
+       extractMetaContent(pageHtml, "og:price:amount") ||
+       "");
 
   const preferredCompareAtText = normalizeText(
-    selectedRegularPriceText
-    || targetRegularPriceText
-    || firstRegularPriceText
+    selectedRegularPriceText ||
+    targetRegularPriceText ||
+    firstRegularPriceText
   );
 
   return {
-    price: normalizePrice(preferredPriceText),
-    compareAtPrice: normalizePrice(preferredCompareAtText),
+    price: normalizePrice(preferredPriceText) || 0,
+    compareAtPrice: normalizePrice(preferredCompareAtText) || undefined,
     currency: detectCurrency(preferredPriceText || preferredCompareAtText || "USD"),
   };
 }
 
-// ─── NEW: Cloud Run / Anti-Bot Infrastructure ────────────────────────────────
+// ─── Infrastructure ────────────────────────────────────────────────────────
 
 function randomInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -325,9 +373,6 @@ const BROWSER_PROFILES: BrowserProfile[] = [
   },
 ];
 
-/**
- * Build randomized headers from a rotating browser profile.
- */
 function buildRandomHeaders(referer?: string): Record<string, string> {
   const profile = BROWSER_PROFILES[randomInt(0, BROWSER_PROFILES.length - 1)];
   return {
@@ -350,8 +395,6 @@ function buildRandomHeaders(referer?: string): Record<string, string> {
     "DNT": "1",
   };
 }
-
-// ─── Cookie Jar ──────────────────────────────────────────────────────────────
 
 class CookieJar {
   private cookies = new Map<string, string>();
@@ -378,8 +421,6 @@ class CookieJar {
   }
 }
 
-// ─── Retry + Timeout Helper ──────────────────────────────────────────────────
-
 async function fetchWithRetry(url: string, headers: Record<string, string>, cookies: CookieJar, attempt = 1): Promise<Response> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -399,14 +440,14 @@ async function fetchWithRetry(url: string, headers: Record<string, string>, cook
 
     cookies.setFromResponse(response);
 
+    // Retry on specific status codes
     if ((response.status === 403 || response.status === 404 || response.status === 429 || response.status === 503) && attempt <= MAX_RETRIES) {
       const delay = Math.min(
         INITIAL_BACKOFF_MS * Math.pow(BACKOFF_MULTIPLIER, attempt - 1),
         MAX_BACKOFF_MS
       ) + randomInt(RANDOM_JITTER_MIN, RANDOM_JITTER_MAX);
       console.warn(
-        `[AliExpressExtractor] HTTP ${response.status} (attempt ${attempt}/${MAX_RETRIES + 1}). ` +
-        `Retrying in ${delay}ms...`
+        `[AliExpress] HTTP ${response.status} (attempt ${attempt}/${MAX_RETRIES + 1}). Retrying in ${delay}ms...`
       );
       await sleep(delay);
       return fetchWithRetry(url, buildRandomHeaders(), cookies, attempt + 1);
@@ -415,23 +456,20 @@ async function fetchWithRetry(url: string, headers: Record<string, string>, cook
     return response;
   } catch (error: any) {
     const isTimeout = error.name === "AbortError" || error.message?.includes("aborted");
-    const isNetwork = error.message?.includes("fetch failed")
-      || error.message?.includes("ECONNREFUSED")
-      || error.message?.includes("ETIMEDOUT")
-      || error.message?.includes("ENOTFOUND")
-      || error.message?.includes("ECONNRESET")
-      || error.message?.includes("socket hang up");
+    const isNetwork = error.message?.includes("fetch failed") ||
+      error.message?.includes("ECONNREFUSED") ||
+      error.message?.includes("ETIMEDOUT") ||
+      error.message?.includes("ENOTFOUND") ||
+      error.message?.includes("ECONNRESET") ||
+      error.message?.includes("socket hang up");
 
-    const shouldRetry = (isTimeout || isNetwork) && attempt <= MAX_RETRIES;
-
-    if (shouldRetry) {
+    if ((isTimeout || isNetwork) && attempt <= MAX_RETRIES) {
       const delay = Math.min(
         INITIAL_BACKOFF_MS * Math.pow(BACKOFF_MULTIPLIER, attempt - 1),
         MAX_BACKOFF_MS
       ) + randomInt(RANDOM_JITTER_MIN, RANDOM_JITTER_MAX);
       console.warn(
-        `[AliExpressExtractor] Network error (attempt ${attempt}/${MAX_RETRIES + 1}): ${error.message}. ` +
-        `Retrying in ${delay}ms...`
+        `[AliExpress] Network error (attempt ${attempt}/${MAX_RETRIES + 1}): ${error.message}. Retrying in ${delay}ms...`
       );
       await sleep(delay);
       return fetchWithRetry(url, buildRandomHeaders(), cookies, attempt + 1);
@@ -443,32 +481,7 @@ async function fetchWithRetry(url: string, headers: Record<string, string>, cook
   }
 }
 
-// ─── NEW: Enhanced Anti-Bot Detection ──────────────────────────────────────────
-
-function detectAliExpressAntiBot(html: string): string | null {
-  const checks: Array<[RegExp, string]> = [
-    [/captcha/i, "AliExpress captcha verification page detected."],
-    [/robot check/i, "AliExpress robot check page detected."],
-    [/security verification/i, "AliExpress security verification page detected."],
-    [/access denied/i, "AliExpress access denied page detected."],
-    [/challenge platform/i, "Cloudflare challenge page detected."],
-    [/cf-browser-verification/i, "Cloudflare browser verification detected."],
-    [/just a moment/i, "Cloudflare \"Just a Moment\" interstitial detected."],
-    [/bot detection/i, "AliExpress bot detection triggered."],
-    [/slide to verify/i, "AliExpress slide verification detected."],
-    [/verify you are human/i, "AliExpress human verification page detected."],
-  ];
-
-  for (const [pattern, message] of checks) {
-    if (pattern.test(html)) {
-      return message;
-    }
-  }
-
-  return null;
-}
-
-// ─── NEW: Recursive JSON Image Extraction ────────────────────────────────────
+// ─── Extraction Helpers ────────────────────────────────────────────────────
 
 function extractImagesFromObject(obj: any): string[] {
   const urls: string[] = [];
@@ -482,7 +495,9 @@ function extractImagesFromObject(obj: any): string[] {
   }
 
   if (Array.isArray(obj)) {
-    obj.forEach((item) => urls.push(...extractImagesFromObject(item)));
+    for (const item of obj) {
+      urls.push(...extractImagesFromObject(item));
+    }
     return urls;
   }
 
@@ -498,347 +513,131 @@ function extractImagesFromObject(obj: any): string[] {
         urls.push(...extractImagesFromObject(obj[key]));
       }
     }
-    Object.values(obj).forEach((value) => {
+    for (const value of Object.values(obj)) {
       urls.push(...extractImagesFromObject(value));
-    });
+    }
   }
 
   return urls;
 }
 
-// ─── NEW: Enhanced Image Extraction (15 strategies) ───────────────────────────
-
-function extractAliExpressImages(html: string): string[] {
+function collectAllImages(html: string): string[] {
   const allUrls = new Set<string>();
-  let strategyCount = 0;
 
-  // ─── Strategy 1: __NEXT_DATA__ JSON ───────────────────────────────────────
-  strategyCount++;
+  // 1. __NEXT_DATA__
   const nextDataMatch = html.match(/<script[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i);
   if (nextDataMatch?.[1]) {
     try {
-      const nextData = parseJsonSafe<any>(nextDataMatch[1].trim());
-      const images = extractImagesFromObject(nextData);
-      if (images.length > 0) {
-        images.forEach((url: string) => allUrls.add(normalizeImageUrl(url)));
-        console.log(`[AliExpress] Strategy ${strategyCount} (__NEXT_DATA__) found ${images.length} images`);
-      } else {
-        console.log(`[AliExpress] Strategy ${strategyCount} (__NEXT_DATA__) found 0 images`);
+      const data = safeJsonParse(nextDataMatch[1].trim());
+      if (data) {
+        const images = extractImagesFromObject(data);
+        for (const img of images) {
+          if (img.startsWith("http")) allUrls.add(normalizeImageUrl(img));
+        }
+        console.log(`[AliExpress] Collected ${images.length} images from __NEXT_DATA__`);
       }
-    } catch (err: any) {
-      console.log(`[AliExpress] Strategy ${strategyCount} (__NEXT_DATA__) parse failed: ${err.message}`);
+    } catch (e) {
+      console.log("[AliExpress] __NEXT_DATA__ parse failed:", e);
     }
-  } else {
-    console.log(`[AliExpress] Strategy ${strategyCount} (__NEXT_DATA__) not found`);
   }
 
-  // ─── Strategy 2: window.__INITIAL_STATE__ ─────────────────────────────────
-  strategyCount++;
-  const initialStateMatch = html.match(/window\.__INITIAL_STATE__\s*=\s*({[\s\S]*?});/i) ||
-                             html.match(/window\.__INITIAL_STATE__\s*=\s*({[\s\S]*?})<\/script>/i);
-  if (initialStateMatch?.[1]) {
+  // 2. window.__INITIAL_STATE__
+  const initStateMatch = html.match(/window\.__INITIAL_STATE__\s*=\s*({[\s\S]*?});/i) ||
+                         html.match(/window\.__INITIAL_STATE__\s*=\s*({[\s\S]*?})<\/script>/i);
+  if (initStateMatch?.[1]) {
     try {
-      const initialState = parseJsonSafe<any>(initialStateMatch[1].trim());
-      const images = extractImagesFromObject(initialState);
-      if (images.length > 0) {
-        images.forEach((url: string) => allUrls.add(normalizeImageUrl(url)));
-        console.log(`[AliExpress] Strategy ${strategyCount} (__INITIAL_STATE__) found ${images.length} images`);
-      } else {
-        console.log(`[AliExpress] Strategy ${strategyCount} (__INITIAL_STATE__) found 0 images`);
+      const data = safeJsonParse(initStateMatch[1].trim());
+      if (data) {
+        const images = extractImagesFromObject(data);
+        for (const img of images) {
+          if (img.startsWith("http")) allUrls.add(normalizeImageUrl(img));
+        }
+        console.log(`[AliExpress] Collected ${images.length} images from __INITIAL_STATE__`);
       }
-    } catch (err: any) {
-      console.log(`[AliExpress] Strategy ${strategyCount} (__INITIAL_STATE__) parse failed: ${err.message}`);
+    } catch (e) {
+      console.log("[AliExpress] __INITIAL_STATE__ parse failed:", e);
     }
-  } else {
-    console.log(`[AliExpress] Strategy ${strategyCount} (__INITIAL_STATE__) not found`);
   }
 
-  // ─── Strategy 3: window.runParams ─────────────────────────────────────────
-  strategyCount++;
+  // 3. window.runParams
   const runParamsMatch = html.match(/window\.runParams\s*=\s*({[\s\S]*?});/i) ||
                          html.match(/window\.runParams\s*=\s*({[\s\S]*?})<\/script>/i);
   if (runParamsMatch?.[1]) {
     try {
-      const runParams = parseJsonSafe<any>(runParamsMatch[1].trim());
-      const images = extractImagesFromObject(runParams);
-      if (images.length > 0) {
-        images.forEach((url: string) => allUrls.add(normalizeImageUrl(url)));
-        console.log(`[AliExpress] Strategy ${strategyCount} (window.runParams) found ${images.length} images`);
-      } else {
-        console.log(`[AliExpress] Strategy ${strategyCount} (window.runParams) found 0 images`);
+      const data = safeJsonParse(runParamsMatch[1].trim());
+      if (data) {
+        const images = extractImagesFromObject(data);
+        for (const img of images) {
+          if (img.startsWith("http")) allUrls.add(normalizeImageUrl(img));
+        }
+        console.log(`[AliExpress] Collected ${images.length} images from runParams`);
       }
-    } catch (err: any) {
-      console.log(`[AliExpress] Strategy ${strategyCount} (window.runParams) parse failed: ${err.message}`);
+    } catch (e) {
+      console.log("[AliExpress] runParams parse failed:", e);
     }
-  } else {
-    console.log(`[AliExpress] Strategy ${strategyCount} (window.runParams) not found`);
   }
 
-  // ─── Strategy 4: window.__APP_DATA__ ──────────────────────────────────────
-  strategyCount++;
+  // 4. __APP_DATA__
   const appDataMatch = html.match(/window\.__APP_DATA__\s*=\s*({[\s\S]*?});/i) ||
                        html.match(/window\.__APP_DATA__\s*=\s*({[\s\S]*?})<\/script>/i);
   if (appDataMatch?.[1]) {
     try {
-      const appData = parseJsonSafe<any>(appDataMatch[1].trim());
-      const images = extractImagesFromObject(appData);
-      if (images.length > 0) {
-        images.forEach((url: string) => allUrls.add(normalizeImageUrl(url)));
-        console.log(`[AliExpress] Strategy ${strategyCount} (__APP_DATA__) found ${images.length} images`);
-      } else {
-        console.log(`[AliExpress] Strategy ${strategyCount} (__APP_DATA__) found 0 images`);
-      }
-    } catch (err: any) {
-      console.log(`[AliExpress] Strategy ${strategyCount} (__APP_DATA__) parse failed: ${err.message}`);
-    }
-  } else {
-    console.log(`[AliExpress] Strategy ${strategyCount} (__APP_DATA__) not found`);
-  }
-
-  // ─── Strategy 5: Embedded JSON blocks with image keywords ─────────────────
-  strategyCount++;
-  const imageKeywords = ["imageModule", "productInfo", "skuModule", "skuProps", "imageList"];
-  let scriptImages = 0;
-  const scriptBlocks = Array.from(html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi));
-  for (const script of scriptBlocks) {
-    const content = script[1];
-    for (const keyword of imageKeywords) {
-      if (content.includes(keyword)) {
-        try {
-          const json = parseJsonSafe<any>(content);
-          if (json) {
-            const images = extractImagesFromObject(json);
-            images.forEach((url: string) => {
-              if (url.startsWith("http")) {
-                allUrls.add(normalizeImageUrl(url));
-                scriptImages++;
-              }
-            });
-          }
-        } catch {
-          const urlMatches = Array.from(content.matchAll(/https?:\/\/[^"'\s)]+/gi));
-          urlMatches.forEach((m) => {
-            const url = m[0].trim();
-            if (url.startsWith("http")) {
-              allUrls.add(normalizeImageUrl(url));
-              scriptImages++;
-            }
-          });
+      const data = safeJsonParse(appDataMatch[1].trim());
+      if (data) {
+        const images = extractImagesFromObject(data);
+        for (const img of images) {
+          if (img.startsWith("http")) allUrls.add(normalizeImageUrl(img));
         }
+        console.log(`[AliExpress] Collected ${images.length} images from __APP_DATA__`);
+      }
+    } catch (e) {
+      console.log("[AliExpress] __APP_DATA__ parse failed:", e);
+    }
+  }
+
+  // 5. Regular image tags
+  const imgMatches = html.matchAll(/<img[^>]+(?:src|data-src)=["']([^"']+)["'][^>]*>/gi);
+  let imgCount = 0;
+  for (const match of imgMatches) {
+    const url = normalizeImageUrl(match[1]);
+    if (url && url.startsWith("http") && !allUrls.has(url)) {
+      // filter placeholders
+      if (!url.includes("placeholder") && !url.includes("via.placeholder")) {
+        allUrls.add(url);
+        imgCount++;
       }
     }
   }
-  console.log(`[AliExpress] Strategy ${strategyCount} (embedded JSON blocks) found ${scriptImages} images`);
+  console.log(`[AliExpress] Collected ${imgCount} images from <img> tags`);
 
-  // ─── Strategy 6: Broad regex for alicdn.com images ──────────────────────
-  strategyCount++;
-  const alicdnPatterns = [
-    /https?:\/\/[^"'\s)]+alicdn\.com[^"'\s)]*\.(jpg|jpeg|png|webp)/gi,
-    /https?:\/\/[^"'\s)]+alibaba\.com[^"'\s)]*\.(jpg|jpeg|png|webp)/gi,
-  ];
-  let alicdnImages = 0;
-  for (const pattern of alicdnPatterns) {
-    const matches = Array.from(html.matchAll(pattern));
-    matches.forEach((m) => {
-      const url = m[0].trim();
-      if (url.startsWith("http")) {
-        allUrls.add(normalizeImageUrl(url));
-        alicdnImages++;
-      }
-    });
-  }
-  console.log(`[AliExpress] Strategy ${strategyCount} (alicdn regex) found ${alicdnImages} images`);
-
-  // ─── Strategy 7: og:image ─────────────────────────────────────────────────
-  strategyCount++;
+  // 6. OpenGraph and Twitter
   const ogImage = extractMetaContent(html, "og:image");
   if (ogImage && ogImage.startsWith("http")) {
-    allUrls.add(normalizeImageUrl(ogImage));
-    console.log(`[AliExpress] Strategy ${strategyCount} (og:image) found 1 image`);
-  } else {
-    console.log(`[AliExpress] Strategy ${strategyCount} (og:image) not found`);
+    allUrls.add(ogImage);
+    console.log("[AliExpress] Collected og:image");
   }
-
-  // ─── Strategy 8: twitter:image ────────────────────────────────────────────
-  strategyCount++;
   const twImage = extractMetaContent(html, "twitter:image");
-  if (twImage && twImage.startsWith("http")) {
-    allUrls.add(normalizeImageUrl(twImage));
-    console.log(`[AliExpress] Strategy ${strategyCount} (twitter:image) found 1 image`);
-  } else {
-    console.log(`[AliExpress] Strategy ${strategyCount} (twitter:image) not found`);
+  if (twImage && twImage.startsWith("http") && !allUrls.has(twImage)) {
+    allUrls.add(twImage);
+    console.log("[AliExpress] Collected twitter:image");
   }
 
-  // ─── Strategy 9: data-src lazy-loaded images ──────────────────────────────
-  strategyCount++;
-  const dataSrcMatches = Array.from(
-    html.matchAll(/<img[^>]+data-src=["']([^"']+)["'][^>]*>/gi)
-  );
-  let dataSrcImages = 0;
-  dataSrcMatches.forEach((m) => {
-    const url = decodeHtmlEntities(m[1]).trim();
-    if (url.startsWith("http")) {
-      allUrls.add(normalizeImageUrl(url));
-      dataSrcImages++;
-    }
-  });
-  console.log(`[AliExpress] Strategy ${strategyCount} (data-src) found ${dataSrcImages} images`);
-
-  // ─── Strategy 10: src attributes on alicdn/alibaba images ─────────────────
-  strategyCount++;
-  const srcMatches = Array.from(
-    html.matchAll(/<img[^>]+src=["']([^"']+)["'][^>]*>/gi)
-  );
-  let srcImages = 0;
-  srcMatches.forEach((m) => {
-    const url = decodeHtmlEntities(m[1]).trim();
-    if (url.startsWith("http") && (url.includes("alicdn.com") || url.includes("alibaba.com"))) {
-      allUrls.add(normalizeImageUrl(url));
-      srcImages++;
-    }
-  });
-  console.log(`[AliExpress] Strategy ${strategyCount} (img src) found ${srcImages} images`);
-
-  // ─── Strategy 11: Gallery containers ────────────────────────────────────────
-  strategyCount++;
-  const galleryMatches = Array.from(
-    html.matchAll(/id=["'][^"']*gallery[^"']*["'][\s\S]{0,5000}?<img[^>]+(?:src|data-src)=["']([^"']+)["']/gi)
-  );
-  let galleryImages = 0;
-  galleryMatches.forEach((m) => {
-    const url = decodeHtmlEntities(m[1]).trim();
-    if (url.startsWith("http")) {
-      allUrls.add(normalizeImageUrl(url));
-      galleryImages++;
-    }
-  });
-  console.log(`[AliExpress] Strategy ${strategyCount} (gallery containers) found ${galleryImages} images`);
-
-  // ─── Strategy 12: Thumbnail containers ────────────────────────────────────
-  strategyCount++;
-  const thumbMatches = Array.from(
-    html.matchAll(/class=["'][^"']*thumb[^"']*["'][^>]+(?:src|data-src)=["']([^"']+)["']/gi)
-  );
-  let thumbImages = 0;
-  thumbMatches.forEach((m) => {
-    const url = decodeHtmlEntities(m[1]).trim();
-    if (url.startsWith("http")) {
-      allUrls.add(normalizeImageUrl(url));
-      thumbImages++;
-    }
-  });
-  console.log(`[AliExpress] Strategy ${strategyCount} (thumbnail containers) found ${thumbImages} images`);
-
-  // ─── Strategy 13: Image viewer containers ─────────────────────────────────
-  strategyCount++;
-  const viewerMatches = Array.from(
-    html.matchAll(/class=["'][^"']*image-viewer[^"']*["'][\s\S]{0,3000}?<img[^>]+(?:src|data-src)=["']([^"']+)["']/gi)
-  );
-  let viewerImages = 0;
-  viewerMatches.forEach((m) => {
-    const url = decodeHtmlEntities(m[1]).trim();
-    if (url.startsWith("http")) {
-      allUrls.add(normalizeImageUrl(url));
-      viewerImages++;
-    }
-  });
-  console.log(`[AliExpress] Strategy ${strategyCount} (image-viewer) found ${viewerImages} images`);
-
-  // ─── Strategy 14: JSON keys (mainImage, subjectImages, etc.) ──────────────
-  strategyCount++;
-  const imageKeys = ["mainImage", "mainImages", "subjectImages", "skuImages", "imagePathList", "galleryImage", "detailImageList"];
-  let keyImages = 0;
-  for (const key of imageKeys) {
-    const pattern = new RegExp(`"${key}"\s*:\s*\[([^\]]+)\]`, "i");
-    const match = html.match(pattern);
-    if (match?.[1]) {
-      const urls = match[1].match(/https?:\/\/[^"'\s,)]+/gi) || [];
-      urls.forEach((url) => {
-        if (url.startsWith("http")) {
-          allUrls.add(normalizeImageUrl(url));
-          keyImages++;
-        }
-      });
-    }
-    const objPattern = new RegExp(`"${key}"\s*:\s*"([^"]+)"`, "i");
-    const objMatch = html.match(objPattern);
-    if (objMatch?.[1]) {
-      const url = objMatch[1].trim();
-      if (url.startsWith("http")) {
-        allUrls.add(normalizeImageUrl(url));
-        keyImages++;
-      }
+  // 7. Broad alicdn URLs
+  const broadMatches = html.matchAll(/https?:\/\/[^"'\s)]+alicdn\.com[^"'\s)]*\.(jpg|jpeg|png|webp)/gi);
+  let broadCount = 0;
+  for (const match of broadMatches) {
+    const url = normalizeImageUrl(match[0]);
+    if (url && !allUrls.has(url)) {
+      allUrls.add(url);
+      broadCount++;
     }
   }
-  console.log(`[AliExpress] Strategy ${strategyCount} (image keys) found ${keyImages} images`);
+  console.log(`[AliExpress] Collected ${broadCount} images from broad alicdn scan`);
 
-  // ─── Strategy 15: Final broad HTML scan for all alicdn URLs ───────────────
-  strategyCount++;
-  const broadMatches = Array.from(
-    html.matchAll(/https?:\/\/[^"'\s)]+alicdn\.com[^"'\s)]+/gi)
-  );
-  let broadImages = 0;
-  broadMatches.forEach((m) => {
-    const url = m[0].trim();
-    if (url.startsWith("http")) {
-      allUrls.add(normalizeImageUrl(url));
-      broadImages++;
-    }
-  });
-  console.log(`[AliExpress] Strategy ${strategyCount} (broad alicdn scan) found ${broadImages} images`);
-
-  const result = [...allUrls];
-  console.log(`[AliExpress] Total unique images extracted: ${result.length}`);
-  return result;
+  return [...allUrls];
 }
 
-// ─── NEW: Embedded Data Extraction ───────────────────────────────────────────
-
-function extractAliExpressEmbeddedData(html: string): any | null {
-  // Strategy 1: window.runParams
-  const runParamsMatch = html.match(/window\.runParams\s*=\s*({[\s\S]*?});/i);
-  if (runParamsMatch?.[1]) {
-    try {
-      return parseJsonSafe<any>(runParamsMatch[1]);
-    } catch {
-      // Continue
-    }
-  }
-
-  // Strategy 2: window.__INITIAL_STATE__
-  const initialStateMatch = html.match(/window\.__INITIAL_STATE__\s*=\s*({[\s\S]*?});/i);
-  if (initialStateMatch?.[1]) {
-    try {
-      return parseJsonSafe<any>(initialStateMatch[1]);
-    } catch {
-      // Continue
-    }
-  }
-
-  // Strategy 3: window.__NEXT_DATA__
-  const nextDataMatch = html.match(/<script[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i);
-  if (nextDataMatch?.[1]) {
-    try {
-      return parseJsonSafe<any>(nextDataMatch[1]);
-    } catch {
-      // Continue
-    }
-  }
-
-  // Strategy 4: window.__APP_DATA__
-  const appDataMatch = html.match(/window\.__APP_DATA__\s*=\s*({[\s\S]*?});/i);
-  if (appDataMatch?.[1]) {
-    try {
-      return parseJsonSafe<any>(appDataMatch[1]);
-    } catch {
-      // Continue
-    }
-  }
-
-  return null;
-}
-
-// ─── Extractor Class ─────────────────────────────────────────────────────────
+// ─── Extractor Class ───────────────────────────────────────────────────────
 
 export class AliExpressExtractor extends BaseExtractor {
   providerName = "AliExpress";
@@ -890,7 +689,9 @@ export class AliExpressExtractor extends BaseExtractor {
   }
 
   private buildCookieHeader(cookies: Map<string, string>): string {
-    return Array.from(cookies.entries()).map(([key, value]) => `${key}=${value}`).join("; ");
+    return Array.from(cookies.entries())
+      .map(([key, value]) => `${key}=${value}`)
+      .join("; ");
   }
 
   private mergeSetCookies(response: Response, cookies: Map<string, string>) {
@@ -904,52 +705,71 @@ export class AliExpressExtractor extends BaseExtractor {
     }
   }
 
-  // ─── ORIGINAL fetch methods (PRESERVED) ───────────────────────────────────
-  private async fetchAliExpressPage(url: string, cookies: Map<string, string>): Promise<string> {
-    const headers = this.getBrowserHeaders(url);
-    const cookieHeader = this.buildCookieHeader(cookies);
-    if (cookieHeader) {
-      headers.Cookie = cookieHeader;
+  // ─── Fetch Methods ──────────────────────────────────────────────────────
+
+  private async fetchAliExpressPageEnhanced(url: string): Promise<string> {
+    let lastHtml = "";
+    let lastStatus = 0;
+
+    // Bootstrap cookies if needed
+    if (!this.homepageBootstrapped) {
+      try {
+        console.log("[AliExpress] Bootstrapping homepage cookies...");
+        const homeHeaders = buildRandomHeaders("https://www.google.com/");
+        const homeRes = await fetchWithRetry("https://www.aliexpress.com/", homeHeaders, this.cookieJar);
+        if (homeRes.ok) {
+          console.log(`[AliExpress] Homepage bootstrap successful, cookies: ${this.cookieJar.getJar().size}`);
+          this.homepageBootstrapped = true;
+          await sleep(randomInt(1_000, 3_000));
+        }
+      } catch (e) {
+        console.warn("[AliExpress] Homepage bootstrap failed (non-fatal):", e);
+      }
     }
 
-    const response = await fetch(url, {
-      headers,
-      redirect: "follow",
-    });
+    for (let i = 0; i < 3; i++) {
+      try {
+        const headers = buildRandomHeaders();
+        console.log(`[AliExpress] Fetch attempt ${i + 1} with UA: ${headers["User-Agent"].slice(0, 60)}...`);
 
-    this.mergeSetCookies(response, cookies);
+        const res = await fetchWithRetry(url, headers, this.cookieJar);
+        lastStatus = res.status;
 
-    if (!response.ok) {
-      throw new Error(`AliExpress product page returned HTTP ${response.status}.`);
+        if (!res.ok) {
+          console.warn(`[AliExpress] HTTP ${res.status}`);
+          if (res.status === 403 || res.status === 503) {
+            const delay = randomInt(2_000, 5_000);
+            console.log(`[AliExpress] ${res.status}, waiting ${delay}ms...`);
+            await sleep(delay);
+            continue;
+          }
+          continue;
+        }
+
+        const html = await res.text();
+        lastHtml = html;
+
+        const antiBotError = detectAliExpressAntiBot(html);
+        if (antiBotError) {
+          console.warn(`[AliExpress] Anti-bot detected: ${antiBotError}`);
+          const delay = randomInt(2_000, 5_000);
+          await sleep(delay);
+          continue;
+        }
+
+        return html;
+      } catch (error: any) {
+        console.warn(`[AliExpress] Fetch attempt ${i + 1} failed: ${error.message}`);
+        const delay = randomInt(1_500, 4_000);
+        await sleep(delay);
+      }
     }
 
-    return await response.text();
-  }
+    if (lastHtml) {
+      return lastHtml;
+    }
 
-  private async bootstrapApiCookies(url: string, productId: string, cookies: Map<string, string>) {
-    const data = JSON.stringify(this.buildAliData(productId));
-    const params = new URLSearchParams({
-      jsv: "2.5.1",
-      appKey: this.appKey,
-      t: Date.now().toString(),
-      sign: "",
-      api: this.apiName,
-      type: "originaljsonp",
-      v: "1.0",
-      timeout: "15000",
-      dataType: "originaljsonp",
-      callback: "mtopjsonp0",
-      data,
-    });
-
-    const response = await fetch(`https://acs.aliexpress.com/h5/${this.apiName}/1.0/?${params}`, {
-      headers: {
-        ...this.getBrowserHeaders(url),
-        "Accept": "*/*",
-      },
-    });
-
-    this.mergeSetCookies(response, cookies);
+    throw new Error(`AliExpress extraction failed: received HTTP ${lastStatus || "unknown"} from the live store page.`);
   }
 
   private async fetchAliExpressApiResult(url: string, productId: string) {
@@ -963,7 +783,10 @@ export class AliExpressExtractor extends BaseExtractor {
 
     const data = JSON.stringify(this.buildAliData(productId));
     const timestamp = Date.now().toString();
-    const sign = crypto.createHash("md5").update(`${token}&${timestamp}&${this.appKey}&${data}`).digest("hex");
+    const sign = crypto.createHash("md5")
+      .update(`${token}&${timestamp}&${this.appKey}&${data}`)
+      .digest("hex");
+
     const params = new URLSearchParams({
       jsv: "2.5.1",
       appKey: this.appKey,
@@ -995,33 +818,227 @@ export class AliExpressExtractor extends BaseExtractor {
     const payload = parseJsonpPayload<any>(await response.text());
     const result = payload?.data?.result;
     if (!result || payload?.ret?.some((entry: string) => /FAIL|ERROR/i.test(entry))) {
-      throw new Error(`AliExpress API response was missing product data for ${url}.`);
+      throw new Error(`AliExpress API response missing product data for ${url}.`);
     }
 
     return { result, cookies };
   }
 
-  private async fetchDescription(descUrl: string, referer: string, cookies: Map<string, string>): Promise<string> {
-    if (!descUrl) return "";
-
-    const response = await fetch(descUrl, {
-      headers: {
-        ...this.getBrowserHeaders(referer),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Cookie": this.buildCookieHeader(cookies),
-      },
-      redirect: "follow",
+  private async bootstrapApiCookies(url: string, productId: string, cookies: Map<string, string>) {
+    const data = JSON.stringify(this.buildAliData(productId));
+    const params = new URLSearchParams({
+      jsv: "2.5.1",
+      appKey: this.appKey,
+      t: Date.now().toString(),
+      sign: "",
+      api: this.apiName,
+      type: "originaljsonp",
+      v: "1.0",
+      timeout: "15000",
+      dataType: "originaljsonp",
+      callback: "mtopjsonp0",
+      data,
     });
 
-    if (!response.ok) {
+    const response = await fetch(`https://acs.aliexpress.com/h5/${this.apiName}/1.0/?${params}`, {
+      headers: {
+        ...this.getBrowserHeaders(url),
+        "Accept": "*/*",
+      },
+    });
+
+    this.mergeSetCookies(response, cookies);
+  }
+
+  private async fetchDescription(descUrl: string, referer: string, cookies: Map<string, string>): Promise<string> {
+    if (!descUrl) return "";
+    try {
+      const response = await fetch(descUrl, {
+        headers: {
+          ...this.getBrowserHeaders(referer),
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Cookie": this.buildCookieHeader(cookies),
+        },
+        redirect: "follow",
+      });
+      if (!response.ok) return "";
+      return stripTags(await response.text());
+    } catch {
       return "";
     }
+  }
 
-    return stripTags(await response.text());
+  // ─── Extraction Methods ─────────────────────────────────────────────────
+
+  private extractTitle(result: any, pageHtml: string, pageTitle: string): string {
+    const sources = [
+      () => normalizeText(result?.TITLE?.subject),
+      () => normalizeText(result?.GLOBAL_DATA?.globalData?.subject),
+      () => cleanupTitle(pageTitle),
+      () => cleanupTitle(extractMetaContent(pageHtml, "og:title")),
+      () => cleanupTitle(extractMetaContent(pageHtml, "twitter:title")),
+      () => {
+        const nextData = this.extractJsonFromScript(pageHtml, "__NEXT_DATA__");
+        if (nextData) {
+          const title = normalizeText(nextData?.props?.pageProps?.product?.title || nextData?.props?.pageProps?.product?.name);
+          if (title) return title;
+        }
+        return "";
+      },
+    ];
+    for (const fn of sources) {
+      const val = fn();
+      if (val && val.length >= 3) return val;
+    }
+    return "";
+  }
+
+  private extractPriceFromResult(result: any, pageHtml: string): { price: number; compareAtPrice?: number; currency: string } {
+    // Use existing resolveAliPrice which already handles API data
+    return resolveAliPrice(result, pageHtml);
+  }
+
+  private extractImages(result: any, pageHtml: string): string[] {
+    const all = new Set<string>();
+
+    // API images
+    const apiGallery = this.extractGallery(result);
+    for (const img of apiGallery) {
+      if (img.startsWith("http")) all.add(normalizeImageUrl(img));
+    }
+    console.log(`[AliExpress] API images: ${apiGallery.length}`);
+
+    // HTML images (using collectAllImages)
+    const htmlImages = collectAllImages(pageHtml);
+    for (const img of htmlImages) {
+      if (img.startsWith("http")) all.add(img);
+    }
+    console.log(`[AliExpress] HTML images: ${htmlImages.length}`);
+
+    // Embedded JSON images
+    const embeddedData = this.extractEmbeddedData(pageHtml);
+    if (embeddedData) {
+      const embeddedImages = extractImagesFromObject(embeddedData);
+      for (const img of embeddedImages) {
+        if (img.startsWith("http")) all.add(normalizeImageUrl(img));
+      }
+      console.log(`[AliExpress] Embedded images: ${embeddedImages.length}`);
+    }
+
+    const result = [...all];
+    console.log(`[AliExpress] Total unique images: ${result.length}`);
+    return result.length > 0 ? result : [PLACEHOLDER_IMAGE];
+  }
+
+  private extractVariants(result: any, fallbackPrice: number): ProductVariant[] {
+    const variants: ProductVariant[] = [];
+    const skuPaths = Array.isArray(result?.SKU?.skuPaths) ? result.SKU.skuPaths : [];
+    const skuPriceInfoMap = result?.PRICE?.skuIdStrPriceInfoMap || result?.PRICE?.skuPriceInfoMap || {};
+
+    if (skuPaths.length === 0) {
+      // Try to extract from other sources: attributes, etc.
+      const attributes = result?.PRODUCT_PROP_PC?.showedProps || [];
+      for (const attr of attributes) {
+        const name = normalizeText(attr?.attrName);
+        const values = attr?.attrValue?.split(",") || [];
+        for (const val of values) {
+          const title = `${name}: ${normalizeText(val)}`;
+          if (title && title.length > 1) {
+            variants.push({
+              id: `attr-${variants.length}`,
+              title,
+              price: fallbackPrice.toFixed(2),
+            });
+          }
+        }
+      }
+      if (variants.length > 0) {
+        console.log(`[AliExpress] Extracted ${variants.length} variants from attributes`);
+        return variants;
+      }
+      return [{ id: "ali-default", title: "Default", price: fallbackPrice.toFixed(2) }];
+    }
+
+    for (const pathEntry of skuPaths) {
+      const skuId = String(pathEntry?.skuIdStr || pathEntry?.skuId || `ali-sku-${variants.length}`);
+      const rawTitle = String(pathEntry?.skuAttr || "")
+        .split(";")
+        .map((part) => normalizeText(part.split("#")[1] || part.split(":")[1] || part))
+        .filter(Boolean)
+        .join(" / ");
+      const priceInfo = skuPriceInfoMap?.[skuId] || skuPriceInfoMap?.[String(pathEntry?.skuId || "")] || {};
+      const salePriceText = normalizeText(
+        priceInfo?.salePriceString ||
+        priceInfo?.salePriceLocal ||
+        priceInfo?.activityAmount?.formatedAmount ||
+        priceInfo?.skuActivityAmount?.formatedAmount ||
+        ""
+      );
+      const regularPriceText = normalizeText(priceInfo?.originalPrice?.formatedAmount || "");
+      const salePrice = normalizePrice(salePriceText);
+      const regularPrice = normalizePrice(regularPriceText);
+      const parsedPrice = shouldPreferRegularPrice(result, priceInfo, salePrice, regularPrice)
+        ? regularPrice
+        : salePrice;
+      const finalPrice = !isNaN(parsedPrice) ? parsedPrice : fallbackPrice;
+      variants.push({
+        id: skuId,
+        title: rawTitle || `Variant ${variants.length + 1}`,
+        price: finalPrice.toFixed(2),
+        inventory: typeof pathEntry?.skuStock === "number" ? pathEntry.skuStock : undefined,
+        sku: skuId,
+      });
+    }
+    console.log(`[AliExpress] Extracted ${variants.length} variants from SKU paths`);
+    return variants;
+  }
+
+  private extractDescription(result: any, pageHtml: string, cookies: Map<string, string>, url: string): string {
+    const descUrl = normalizeText(result?.DESC?.pcDescUrl || result?.DESC?.msiteDescUrl || result?.DESC?.nativeDescUrl);
+    const sources = [
+      () => {
+        const desc = normalizeText(
+          this.fetchDescription(descUrl, url, cookies) ||
+          flattenPreContent(result?.DESC?.preContent) ||
+          result?.DESC?.sellingPointInfo?.title ||
+          ""
+        );
+        return desc;
+      },
+      () => extractMetaContent(pageHtml, "description"),
+      () => extractMetaContent(pageHtml, "og:description"),
+      () => {
+        const nextData = this.extractJsonFromScript(pageHtml, "__NEXT_DATA__");
+        if (nextData) {
+          const desc = normalizeText(nextData?.props?.pageProps?.product?.description);
+          if (desc) return desc;
+        }
+        return "";
+      },
+    ];
+    for (const fn of sources) {
+      const val = fn();
+      if (val && val.length >= 10) return val;
+    }
+    return "";
+  }
+
+  private extractVendor(result: any): string {
+    const sources = [
+      () => normalizeText(result?.GLOBAL_DATA?.globalData?.storeName),
+      () => normalizeText(result?.SELLER?.storeName),
+      () => normalizeText(result?.SELLER?.companyName),
+      () => "AliExpress",
+    ];
+    for (const fn of sources) {
+      const val = fn();
+      if (val && val.length >= 2) return val;
+    }
+    return "AliExpress";
   }
 
   private extractGallery(result: any): string[] {
-    const imageCandidates = [
+    const candidates = [
       ...(result?.HEADER_IMAGE_PC?.imagePathList || []),
       result?.GLOBAL_DATA?.globalData?.image,
       ...(result?.SKU?.skuProperties || []).flatMap((property: any) =>
@@ -1031,125 +1048,66 @@ export class AliExpressExtractor extends BaseExtractor {
         ])
       ),
     ];
-
     return [...new Set(
-      imageCandidates
-        .map((value: unknown) => normalizeImageUrl(String(value || "")))
-        .filter((value) => value.startsWith("http"))
+      candidates
+        .map((v: unknown) => normalizeImageUrl(String(v || "")))
+        .filter((v) => v.startsWith("http"))
     )];
   }
 
-  private extractVariants(result: any, fallbackPrice: number): ProductVariant[] {
-    const skuPaths = Array.isArray(result?.SKU?.skuPaths) ? result.SKU.skuPaths : [];
-    const skuPriceInfoMap = result?.PRICE?.skuIdStrPriceInfoMap || result?.PRICE?.skuPriceInfoMap || {};
-
-    const variants = skuPaths.map((pathEntry: any, index: number) => {
-      const skuId = String(pathEntry?.skuIdStr || pathEntry?.skuId || `ali-sku-${index}`);
-      const rawTitle = String(pathEntry?.skuAttr || "")
-        .split(";")
-        .map((part) => normalizeText(part.split("#")[1] || part.split(":")[1] || part))
-        .filter(Boolean)
-        .join(" / ");
-      const priceInfo = skuPriceInfoMap?.[skuId] || skuPriceInfoMap?.[String(pathEntry?.skuId || "")] || {};
-      const salePriceText = normalizeText(
-        priceInfo?.salePriceString
-        || priceInfo?.salePriceLocal
-        || priceInfo?.activityAmount?.formatedAmount
-        || priceInfo?.skuActivityAmount?.formatedAmount
-        || ""
-      );
-      const regularPriceText = normalizeText(priceInfo?.originalPrice?.formatedAmount || "");
-      const salePrice = normalizePrice(salePriceText);
-      const regularPrice = normalizePrice(regularPriceText);
-      const parsedPrice = shouldPreferRegularPrice(result, priceInfo, salePrice, regularPrice)
-        ? regularPrice
-        : salePrice;
-
-      return {
-        id: skuId,
-        title: rawTitle || `Variant ${index + 1}`,
-        price: (!isNaN(parsedPrice) ? parsedPrice : fallbackPrice).toFixed(2),
-        inventory: typeof pathEntry?.skuStock === "number" ? pathEntry.skuStock : undefined,
-        sku: skuId,
-      };
-    });
-
-    return variants.length > 0 ? variants : [{
-      id: "ali-default",
-      title: "Default",
-      price: fallbackPrice.toFixed(2),
-    }];
-  }
-
   private extractSpecifications(result: any): Record<string, string> {
-    const specifications: Record<string, string> = {};
-    const props = Array.isArray(result?.PRODUCT_PROP_PC?.showedProps) ? result.PRODUCT_PROP_PC.showedProps : [];
-
+    const specs: Record<string, string> = {};
+    const props = Array.isArray(result?.PRODUCT_PROP_PC?.showedProps)
+      ? result.PRODUCT_PROP_PC.showedProps
+      : [];
     for (const item of props) {
       const key = normalizeText(item?.attrName);
       const value = normalizeText(item?.attrValue);
-      if (key && value) {
-        specifications[key] = value;
-      }
+      if (key && value) specs[key] = value;
     }
-
     const storeName = normalizeText(result?.GLOBAL_DATA?.globalData?.storeName);
-    if (storeName) {
-      specifications.Store = storeName;
-    }
-
-    return specifications;
+    if (storeName) specs.Store = storeName;
+    return specs;
   }
 
-  // ─── NEW: Enhanced fetch with anti-bot bypass ───────────────────────────────
-  private async fetchAliExpressPageEnhanced(url: string): Promise<string> {
-    let lastHtml = "";
-    let lastStatus = 0;
-
-    for (let i = 0; i < 3; i++) {
+  private extractJsonFromScript(html: string, scriptId: string): any {
+    const pattern = new RegExp(`<script[^>]*id=["']${scriptId}["'][^>]*>([\\s\\S]*?)<\\/script>`, "i");
+    const match = html.match(pattern);
+    if (match?.[1]) {
       try {
-        const headers = buildRandomHeaders();
-        console.log(`[AliExpressExtractor] Fetch attempt ${i + 1} with UA: ${headers["User-Agent"].slice(0, 60)}...`);
-
-        const res = await fetchWithRetry(url, headers, this.cookieJar);
-        lastStatus = res.status;
-
-        if (!res.ok) {
-          console.warn(`[AliExpressExtractor] HTTP ${res.status}`);
-          if (res.status === 403 || res.status === 503) {
-            const delay = randomInt(2_000, 5_000);
-            console.log(`[AliExpressExtractor] ${res.status} detected, waiting ${delay}ms...`);
-            await sleep(delay);
-            continue;
-          }
-          continue;
-        }
-
-        const html = await res.text();
-        lastHtml = html;
-
-        const antiBotError = detectAliExpressAntiBot(html);
-        if (antiBotError) {
-          console.warn(`[AliExpressExtractor] Anti-bot detected: ${antiBotError}`);
-          const delay = randomInt(2_000, 5_000);
-          await sleep(delay);
-          continue;
-        }
-
-        return html;
-      } catch (error: any) {
-        console.warn(`[AliExpressExtractor] Fetch attempt ${i + 1} failed: ${error.message}`);
-        const delay = randomInt(1_500, 4_000);
-        await sleep(delay);
+        return safeJsonParse(match[1].trim());
+      } catch (e) {
+        // ignore
       }
     }
-
-    if (lastHtml) {
-      return lastHtml;
-    }
-
-    throw new Error(`AliExpress extraction failed: received HTTP ${lastStatus || "unknown"} from the live store page.`);
+    return null;
   }
+
+  private extractEmbeddedData(html: string): any {
+    const patterns = [
+      { name: "runParams", re: /window\.runParams\s*=\s*({[\s\S]*?});/i },
+      { name: "__INITIAL_STATE__", re: /window\.__INITIAL_STATE__\s*=\s*({[\s\S]*?});/i },
+      { name: "__NEXT_DATA__", re: /<script[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i },
+      { name: "__APP_DATA__", re: /window\.__APP_DATA__\s*=\s*({[\s\S]*?});/i },
+    ];
+    for (const { name, re } of patterns) {
+      const match = html.match(re);
+      if (match?.[1]) {
+        try {
+          const data = safeJsonParse(match[1].trim());
+          if (data) {
+            console.log(`[AliExpress] Extracted embedded data from ${name}`);
+            return data;
+          }
+        } catch (e) {
+          console.log(`[AliExpress] Failed to parse ${name}:`, e);
+        }
+      }
+    }
+    return null;
+  }
+
+  // ─── Main Extract ────────────────────────────────────────────────────────
 
   public async extract(url: string, rawHtml?: string, customPrompt?: string): Promise<NormalizedProduct> {
     const cleanUrl = url.split("?")[0].split("#")[0];
@@ -1162,148 +1120,111 @@ export class AliExpressExtractor extends BaseExtractor {
       return this.parseUrlFallback(url, this.providerName);
     }
 
-    const matched = this.isTestMode() ? TEST_DATASET[this.providerName]?.find(
-      (x) => x.url.toLowerCase().split("?")[0].split("#")[0] === cleanUrl.toLowerCase()
-    ) : undefined;
-
+    // Check test dataset
+    const matched = this.isTestMode()
+      ? TEST_DATASET[this.providerName]?.find(
+          (x) => x.url.toLowerCase().split("?")[0].split("#")[0] === cleanUrl.toLowerCase()
+        )
+      : undefined;
     if (matched) {
       if (matched.success && matched.product) {
-        console.log(`[AliExpressExtractor] Deep-crawl offline database hit for: ${matched.product.title}`);
+        console.log(`[AliExpress] Test dataset hit for: ${matched.product.title}`);
         return matched.product;
       }
-      throw new Error(matched.error?.errorMessage || "Simulated extraction failure for test URL.");
+      throw new Error(matched.error?.errorMessage || "Simulated extraction failure.");
     }
 
+    // Extract product ID
     const productId = extractProductId(url);
     if (!productId) {
       throw new Error(`AliExpress extraction failed. Could not determine a product ID from ${url}.`);
     }
+    console.log(`[AliExpress] Product ID: ${productId}`);
 
-    // ─── NEW: Bootstrap homepage cookies ────────────────────────────────────
-    if (!this.homepageBootstrapped) {
-      try {
-        console.log(`[AliExpressExtractor] Bootstrapping AliExpress homepage cookies...`);
-        const homeHeaders = buildRandomHeaders("https://www.google.com/");
-        const homeRes = await fetchWithRetry("https://www.aliexpress.com/", homeHeaders, this.cookieJar);
-        if (homeRes.ok) {
-          console.log(`[AliExpressExtractor] Homepage bootstrap successful, cookies stored: ${this.cookieJar.getJar().size}`);
-          this.homepageBootstrapped = true;
-          await sleep(randomInt(1_000, 3_000));
-        }
-      } catch (err: any) {
-        console.warn(`[AliExpressExtractor] Homepage bootstrap failed (non-fatal): ${err.message}`);
-      }
-    }
-
-    const bootstrapCookies = new Map<string, string>();
+    // Fetch page HTML if not provided
     let pageHtml = rawHtml?.trim() || "";
     let pageTitle = "";
+    let apiResult: any = null;
+    let cookies = new Map<string, string>();
 
     try {
       if (!pageHtml) {
         pageHtml = await this.fetchAliExpressPageEnhanced(cleanUrl);
       }
       pageTitle = cleanupTitle((pageHtml.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || "");
+      console.log(`[AliExpress] Page title: "${pageTitle}"`);
     } catch (error: any) {
-      console.warn(`[AliExpressExtractor] Product page bootstrap warning for ${cleanUrl}:`, error.message);
-      pageHtml = "";
-      pageTitle = "";
+      console.warn(`[AliExpress] Page fetch warning: ${error.message}`);
     }
 
-    let result: any;
-    let cookies: Map<string, string>;
-
+    // Try API
     try {
-      const apiResult = await this.fetchAliExpressApiResult(cleanUrl, productId);
-      result = apiResult.result;
-      cookies = apiResult.cookies;
+      const apiData = await this.fetchAliExpressApiResult(cleanUrl, productId);
+      apiResult = apiData.result;
+      cookies = apiData.cookies;
+      console.log("[AliExpress] API fetch successful");
     } catch (error: any) {
-      const pageError = pageHtml ? detectAliExpressPageError(pageHtml, pageTitle) : null;
-      if (pageError) {
-        throw new Error(pageError);
-      }
-      throw error;
+      console.warn(`[AliExpress] API fetch failed: ${error.message}`);
+      // Continue without API
     }
 
-    for (const [key, value] of bootstrapCookies.entries()) {
-      if (!cookies.has(key)) {
-        cookies.set(key, value);
-      }
-    }
+    // Extract data from API or fallback
+    const result = apiResult || {};
 
-    const title = cleanupTitle(
-      result?.TITLE?.subject
-      || result?.GLOBAL_DATA?.globalData?.subject
-      || pageTitle
-    );
+    // Title
+    const title = this.extractTitle(result, pageHtml, pageTitle);
     if (!title || title.length < 3) {
       throw new Error(`AliExpress extraction failed. Missing product title for ${url}.`);
     }
+    console.log(`[AliExpress] Title: "${title}"`);
 
-    // ─── NEW: Enhanced image extraction with 15 strategies ──────────────────
-    const apiGallery = this.extractGallery(result);
-    const htmlGallery = pageHtml ? extractAliExpressImages(pageHtml) : [];
-    const embeddedData = pageHtml ? extractAliExpressEmbeddedData(pageHtml) : null;
-    const embeddedGallery = embeddedData ? extractImagesFromObject(embeddedData).filter((u: string) => u.startsWith("http")) : [];
-
-    const allImages = new Set<string>([
-      ...apiGallery,
-      ...htmlGallery,
-      ...embeddedGallery,
-    ]);
-    const gallery = [...allImages];
-
-    // ZERO-FAILURE: Never throw on missing images
-    const finalGallery = gallery.length > 0 ? gallery : [PLACEHOLDER_IMAGE];
-    console.log(`[AliExpressExtractor] Final image count: ${finalGallery.length} (API: ${apiGallery.length}, HTML: ${htmlGallery.length}, Embedded: ${embeddedGallery.length}, placeholder: ${gallery.length === 0})`);
-
-    const resolvedPrice = resolveAliPrice(result, pageHtml);
-    const price = resolvedPrice.price;
-    if (isNaN(price)) {
+    // Price
+    const priceData = this.extractPriceFromResult(result, pageHtml);
+    if (isNaN(priceData.price) || priceData.price <= 0) {
       throw new Error(`AliExpress extraction failed. Missing product price for ${url}.`);
     }
+    console.log(`[AliExpress] Price: ${priceData.price} ${priceData.currency}`);
 
-    const compareAtPrice = resolvedPrice.compareAtPrice;
-    const currency = resolvedPrice.currency;
+    // Images
+    const gallery = this.extractImages(result, pageHtml);
+    console.log(`[AliExpress] Gallery images: ${gallery.length}`);
 
-    const descUrl = normalizeText(result?.DESC?.pcDescUrl || result?.DESC?.msiteDescUrl || result?.DESC?.nativeDescUrl);
-    const description = normalizeText(
-      await this.fetchDescription(descUrl, cleanUrl, cookies)
-      || flattenPreContent(result?.DESC?.preContent)
-      || result?.DESC?.sellingPointInfo?.title
-      || extractMetaContent(pageHtml, "description")
-      || extractMetaContent(pageHtml, "og:description")
-    );
+    // Description
+    const description = this.extractDescription(result, pageHtml, cookies, cleanUrl);
     if (!description || description.length < 10) {
-      throw new Error(`AliExpress extraction failed. Missing product description for ${url}.`);
+      console.warn(`[AliExpress] Description fallback: using title`);
     }
+    const finalDescription = description || title;
 
-    const vendor = normalizeText(
-      result?.GLOBAL_DATA?.globalData?.storeName
-      || result?.SELLER?.storeName
-      || result?.SELLER?.companyName
-      || "AliExpress"
-    );
+    // Vendor
+    const vendor = this.extractVendor(result);
+    console.log(`[AliExpress] Vendor: "${vendor}"`);
 
-    const variants = this.extractVariants(result, price);
+    // Variants
+    const variants = this.extractVariants(result, priceData.price);
+    console.log(`[AliExpress] Variants: ${variants.length}`);
+
+    // Specifications
     const specifications = this.extractSpecifications(result);
-    const availability = variants.some((variant) => variant.inventory === undefined || variant.inventory > 0);
+
+    // Availability
+    const availability = variants.some((v) => v.inventory === undefined || v.inventory > 0);
 
     const product: NormalizedProduct = {
       title,
-      description,
-      images: finalGallery[0],
-      gallery: finalGallery,
+      description: finalDescription,
+      images: gallery[0] || PLACEHOLDER_IMAGE,
+      gallery,
       variants,
       specifications,
       vendor,
-      price,
-      compare_at_price: typeof compareAtPrice === "number" && !isNaN(compareAtPrice) ? compareAtPrice : undefined,
-      currency,
+      price: priceData.price,
+      compare_at_price: priceData.compareAtPrice,
+      currency: priceData.currency,
       availability,
     };
 
-    console.log(`[AliExpressExtractor] Successfully parsed AliExpress product: ${title} | Images: ${finalGallery.length} | Price: ${price} ${currency}`);
+    console.log(`[AliExpress] Successfully parsed product: ${product.title} | Images: ${gallery.length} | Price: ${product.price} ${product.currency}`);
     return product;
   }
 }
