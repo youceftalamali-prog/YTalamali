@@ -55,6 +55,10 @@ import {
   VideoInputMode,
   VideoAspectRatio,
   createEmptyBrandIntelligence,
+  AIProviderName,
+  AIProviderConfig,
+  WooCommerceConnection,
+  OAuthState,
 } from "../src/types.ts";
 import {
   BILLING_PLANS,
@@ -63,6 +67,7 @@ import {
   getBillingPlans,
   getPlanPrice,
 } from "./billing/plans.ts";
+import { encrypt, decrypt } from "./encryption.ts";
 
 const isProduction = process.env.NODE_ENV === "production";
 const SQLITE_DIR = isProduction ? "/tmp" : path.join(process.cwd(), "storage");
@@ -108,7 +113,6 @@ export class DatabaseManager {
   private async init(): Promise<void> {
     if (this.isInitialized) return;
 
-    // Ensure storage directory exists safely
     try {
       if (!fs.existsSync(SQLITE_DIR)) {
         fs.mkdirSync(SQLITE_DIR, { recursive: true });
@@ -117,17 +121,14 @@ export class DatabaseManager {
       console.error(`[SQLite Warn] Could not ensure SQLite directory at ${SQLITE_DIR}:`, error);
     }
 
-    // Safely load WASM SQLite binary directly from node_modules, checking multiple fallbacks
     let wasmPath = path.join(process.cwd(), "node_modules", "sql.js", "dist", "sql-wasm.wasm");
     if (!fs.existsSync(wasmPath)) {
-      // Fallback 1: Resolve relative to __dirname (useful when running from dist/)
       const dirnameFallback = typeof __dirname !== "undefined"
         ? path.join(__dirname, "..", "node_modules", "sql.js", "dist", "sql-wasm.wasm")
         : "";
       if (dirnameFallback && fs.existsSync(dirnameFallback)) {
         wasmPath = dirnameFallback;
       } else {
-        // Fallback 2: Under dist if bundled differently
         const localFallback = typeof __dirname !== "undefined"
           ? path.join(__dirname, "node_modules", "sql.js", "dist", "sql-wasm.wasm")
           : "";
@@ -211,7 +212,6 @@ export class DatabaseManager {
   }
 
   private createSchema(): void {
-    // 1. Workspaces
     this.db.run(`
       CREATE TABLE IF NOT EXISTS workspaces (
         id TEXT PRIMARY KEY,
@@ -506,7 +506,6 @@ export class DatabaseManager {
       );
     `);
 
-    // 2. Products
     this.db.run(`
       CREATE TABLE IF NOT EXISTS products (
         id TEXT PRIMARY KEY,
@@ -526,7 +525,6 @@ export class DatabaseManager {
       );
     `);
 
-    // 3. Import Operations
     this.db.run(`
       CREATE TABLE IF NOT EXISTS import_operations (
         id TEXT PRIMARY KEY,
@@ -541,7 +539,6 @@ export class DatabaseManager {
       );
     `);
 
-    // 4. Audit Logs
     this.db.run(`
       CREATE TABLE IF NOT EXISTS audit_logs (
         id TEXT PRIMARY KEY,
@@ -552,7 +549,6 @@ export class DatabaseManager {
       );
     `);
 
-    // 5. Product Analyses history table
     this.db.run(`
       CREATE TABLE IF NOT EXISTS product_analyses (
         id TEXT PRIMARY KEY,
@@ -577,7 +573,6 @@ export class DatabaseManager {
     `);
     this.ensureColumn("product_analyses", "brand_intelligence", "TEXT NOT NULL DEFAULT '{}'");
 
-    // 6. Credit Ledger
     this.db.run(`
       CREATE TABLE IF NOT EXISTS credit_ledger (
         id TEXT PRIMARY KEY,
@@ -593,7 +588,6 @@ export class DatabaseManager {
     `);
     this.ensureColumn("credit_ledger", "credit_bucket", "TEXT");
 
-    // 7. Content Generations Table
     this.db.run(`
       CREATE TABLE IF NOT EXISTS content_generations (
         id TEXT PRIMARY KEY,
@@ -608,7 +602,6 @@ export class DatabaseManager {
       );
     `);
 
-    // 8. Individual Hooks Table
     this.db.run(`
       CREATE TABLE IF NOT EXISTS hooks (
         id TEXT PRIMARY KEY,
@@ -621,7 +614,6 @@ export class DatabaseManager {
       );
     `);
 
-    // 9. Individual Scripts Table
     this.db.run(`
       CREATE TABLE IF NOT EXISTS scripts (
         id TEXT PRIMARY KEY,
@@ -639,7 +631,6 @@ export class DatabaseManager {
       );
     `);
 
-    // 10. Social Accounts
     this.db.run(`
       CREATE TABLE IF NOT EXISTS social_accounts (
         id TEXT PRIMARY KEY,
@@ -657,7 +648,6 @@ export class DatabaseManager {
       );
     `);
 
-    // 11. Social Posts
     this.db.run(`
       CREATE TABLE IF NOT EXISTS social_posts (
         id TEXT PRIMARY KEY,
@@ -684,7 +674,6 @@ export class DatabaseManager {
       );
     `);
 
-    // 12. AI Video Generations
     this.db.run(`
       CREATE TABLE IF NOT EXISTS video_generations (
         id TEXT PRIMARY KEY,
@@ -716,6 +705,54 @@ export class DatabaseManager {
         completed_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
+      );
+    `);
+
+    // ─── NEW: Integration Tables ────────────────────────────────────────────
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS workspace_ai_providers (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        api_key_encrypted TEXT NOT NULL,
+        api_key_iv TEXT NOT NULL,
+        is_enabled INTEGER DEFAULT 1,
+        priority INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+        UNIQUE(workspace_id, provider)
+      );
+    `);
+
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS workspace_woocommerce_connections (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        store_url TEXT NOT NULL,
+        consumer_key_encrypted TEXT NOT NULL,
+        consumer_key_iv TEXT NOT NULL,
+        consumer_secret_encrypted TEXT NOT NULL,
+        consumer_secret_iv TEXT NOT NULL,
+        is_active INTEGER DEFAULT 1,
+        last_sync_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+        UNIQUE(workspace_id)
+      );
+    `);
+
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS oauth_states (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        state TEXT NOT NULL UNIQUE,
+        redirect_uri TEXT,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
       );
     `);
   }
@@ -820,18 +857,15 @@ export class DatabaseManager {
   }
 
   private seedInitialData(): void {
-    // Check if default workspace exists
     const res = this.db.exec("SELECT id FROM workspaces WHERE id = 'default-workspace'");
     if (res.length === 0 || res[0].values.length === 0) {
       console.log("[SQLite Database] Seeding default workspace and test profiles...");
       
-      // Default tenant workspace
       this.db.run(`
         INSERT INTO workspaces (id, name, credits)
         VALUES ('default-workspace', 'Primary Workspace', 500)
       `);
 
-      // Mock other tenants to verify absolute isolation
       this.db.run(`
         INSERT INTO workspaces (id, name, credits)
         VALUES ('competitor-tenant', 'Malicious Competitor LLC', 100),
@@ -845,7 +879,6 @@ export class DatabaseManager {
                ('seed-3', 'exhausted-tenant', 'subscription_allocation', 10, 10, 'Initial workspace credit allocation', '${new Date().toISOString()}')
       `);
 
-      // Sync and log
       this.logAudit("default-workspace", "WORKSPACE_SEED", "Provisioned workspace with 500 default credits.");
       this.logAudit("competitor-tenant", "WORKSPACE_SEED", "Provisioned isolated playground workspace with 100 credits.");
       this.logAudit("exhausted-tenant", "WORKSPACE_SEED", "Provisioned isolated playground workspace with 10 credits.");
@@ -1390,7 +1423,6 @@ export class DatabaseManager {
         $workspaceId: workspaceId,
         $productId: productId,
       });
-      // Delete associated import operations so we can re-import cleanly
       this.db.run("DELETE FROM import_operations WHERE workspace_id = $workspaceId AND product_id = $productId", {
         $workspaceId: workspaceId,
         $productId: productId,
@@ -1585,7 +1617,6 @@ export class DatabaseManager {
     const productId = uuidv4();
     const now = new Date().toISOString();
 
-    // 1. Insert product
     this.db.run(
       `INSERT INTO products (id, workspace_id, title, description, images, gallery, variants, specifications, vendor, price, compare_at_price, currency, availability, created_at)
        VALUES ($id, $workspaceId, $title, $description, $images, $gallery, $variants, $specifications, $vendor, $price, $compareAtPrice, $currency, $availability, $createdAt)`,
@@ -1607,7 +1638,6 @@ export class DatabaseManager {
       }
     );
 
-    // 3. Update operation status and credit record
     this.db.run(
       `UPDATE import_operations
        SET status = 'success', credit_charged = 20, product_id = $productId
@@ -1615,7 +1645,6 @@ export class DatabaseManager {
       { $id: opId, $productId: productId }
     );
 
-    // 4. Log high-fidelity Auditing
     this.logAudit(
       workspaceId,
       "CREDIT_DEBIT",
@@ -1641,7 +1670,6 @@ export class DatabaseManager {
     workspaceId: string,
     errorMessage: string
   ): void {
-    // 1. Change operation status to failed, charge 0 credits (failed imports refund/cost zero!)
     this.db.run(
       `UPDATE import_operations
        SET status = 'failed', credit_charged = 0, error_message = $errorMessage
@@ -1649,7 +1677,6 @@ export class DatabaseManager {
       { $id: opId, $errorMessage: errorMessage }
     );
 
-    // 2. Add audit entry
     this.logAudit(
       workspaceId,
       "IMPORT_FAILURE",
@@ -1675,14 +1702,11 @@ export class DatabaseManager {
     );
   }
 
-  // Helper for admin refilling credits in UI
   public setCredits(workspaceId: string, amount: number): void {
     this.rebalanceWorkspaceCredits(workspaceId, amount);
     this.logAudit(workspaceId, "CREDITS_SET", `Workspace balance updated/reset to ${amount} credits.`);
     this.saveToDisk();
   }
-
-  // --- Credit Ledger Ledger Helpers ---
 
   public logCreditTransaction(
     workspaceId: string,
@@ -1695,7 +1719,6 @@ export class DatabaseManager {
     const id = uuidv4();
     const now = new Date().toISOString();
     
-    // Get current balance
     const ws = this.getWorkspace(workspaceId);
     const balance = ws ? ws.credits : 0;
 
@@ -1738,8 +1761,6 @@ export class DatabaseManager {
     stmt.free();
     return ledger;
   }
-
-  // --- Product Analysis History and Versioning Helpers ---
 
   public getProductAnalyses(productId: string): ProductAnalysis[] {
     const stmt = this.db.prepare("SELECT * FROM product_analyses WHERE product_id = $productId ORDER BY version DESC");
@@ -1846,7 +1867,6 @@ export class DatabaseManager {
     const id = uuidv4();
     const now = new Date().toISOString();
 
-    // 1. Get current maximum version number for this product & language combination
     const stmt = this.db.prepare(
       "SELECT COALESCE(MAX(version), 0) AS max_v FROM product_analyses WHERE product_id = $productId AND language_code = $language"
     );
@@ -1857,13 +1877,11 @@ export class DatabaseManager {
     }
     stmt.free();
 
-    // 2. Set any previous versions of this product/language analysis to has_latest = 0
     this.db.run(
       "UPDATE product_analyses SET is_latest = 0 WHERE product_id = $productId AND language_code = $language",
       { $productId: analysis.productId, $language: analysis.languageCode }
     );
 
-    // 3. Insert the new analysis record with is_latest = 1
     this.db.run(
       `INSERT INTO product_analyses (
         id, product_id, workspace_id, version, is_latest, language_code, confidence_score,
@@ -1938,8 +1956,6 @@ export class DatabaseManager {
       description
     );
   }
-
-  // --- Content Generation Engine (Phase 3) Helpers ---
 
   public getContentGenerations(productId: string): ContentGenerationRecord[] {
     const stmt = this.db.prepare("SELECT * FROM content_generations WHERE product_id = $productId ORDER BY version DESC");
@@ -2025,7 +2041,6 @@ export class DatabaseManager {
     const id = uuidv4();
     const now = new Date().toISOString();
 
-    // 1. Get current maximum version number for this product and contentType combination
     const stmt = this.db.prepare(
       "SELECT COALESCE(MAX(version), 0) AS max_v FROM content_generations WHERE product_id = $productId AND content_type = $contentType"
     );
@@ -2036,13 +2051,11 @@ export class DatabaseManager {
     }
     stmt.free();
 
-    // 2. Set any previous versions of this product/contentType content_generations to is_latest = 0
     this.db.run(
       "UPDATE content_generations SET is_latest = 0 WHERE product_id = $productId AND content_type = $contentType",
       { $productId: productId, $contentType: contentType }
     );
 
-    // 3. Insert the new content_generations record with is_latest = 1
     this.db.run(
       `INSERT INTO content_generations (
         id, product_id, workspace_id, content_type, credits_charged, payload, version, is_latest, created_at
@@ -2061,7 +2074,6 @@ export class DatabaseManager {
       }
     );
 
-    // 4. Save hooks to the hooks table if present in the payload
     if (payload.hooks && Array.isArray(payload.hooks)) {
       payload.hooks.forEach((hook: any) => {
         this.db.run(
@@ -2080,7 +2092,6 @@ export class DatabaseManager {
       });
     }
 
-    // 5. Save scripts to the scripts table if present in the payload
     if (payload.scripts && Array.isArray(payload.scripts)) {
       payload.scripts.forEach((script: any) => {
         this.db.run(
@@ -2603,6 +2614,7 @@ export class DatabaseManager {
     }
 
     this.saveToDisk();
+
     return {
       ...record,
       version: nextVersion,
@@ -4217,6 +4229,260 @@ export class DatabaseManager {
       "DELETE FROM queue_job_logs WHERE created_at < $logCutoff",
       { $logCutoff: logCutoff }
     );
+    this.saveToDisk();
+  }
+
+  // ─── NEW: Integration Methods ────────────────────────────────────────
+
+  public getAIProviders(workspaceId: string): AIProviderConfig[] {
+    const stmt = this.db.prepare(
+      "SELECT provider, is_enabled, priority FROM workspace_ai_providers WHERE workspace_id = $workspaceId ORDER BY priority ASC"
+    );
+    stmt.bind({ $workspaceId: workspaceId });
+    const configs: AIProviderConfig[] = [];
+    while (stmt.step()) {
+      const row = stmt.getAsObject();
+      configs.push({
+        provider: row.provider as AIProviderName,
+        isEnabled: row.is_enabled === 1,
+        priority: row.priority,
+        hasApiKey: true,
+      });
+    }
+    stmt.free();
+    return configs;
+  }
+
+  public saveAIProvider(
+    workspaceId: string,
+    provider: AIProviderName,
+    apiKey: string,
+    isEnabled: boolean,
+    priority: number = 0
+  ): void {
+    const now = new Date().toISOString();
+    const { encrypted, iv } = encrypt(apiKey);
+    const stmt = this.db.prepare(
+      "SELECT id FROM workspace_ai_providers WHERE workspace_id = $workspaceId AND provider = $provider LIMIT 1"
+    );
+    stmt.bind({ $workspaceId: workspaceId, $provider: provider });
+    const exists = stmt.step();
+    stmt.free();
+    if (exists) {
+      this.db.run(
+        `UPDATE workspace_ai_providers
+         SET api_key_encrypted = $apiKeyEncrypted,
+             api_key_iv = $apiKeyIv,
+             is_enabled = $isEnabled,
+             priority = $priority,
+             updated_at = $updatedAt
+         WHERE workspace_id = $workspaceId AND provider = $provider`,
+        {
+          $workspaceId: workspaceId,
+          $provider: provider,
+          $apiKeyEncrypted: encrypted,
+          $apiKeyIv: iv,
+          $isEnabled: isEnabled ? 1 : 0,
+          $priority: priority,
+          $updatedAt: now,
+        }
+      );
+    } else {
+      this.db.run(
+        `INSERT INTO workspace_ai_providers (
+          id, workspace_id, provider, api_key_encrypted, api_key_iv, is_enabled, priority, created_at, updated_at
+        ) VALUES (
+          $id, $workspaceId, $provider, $apiKeyEncrypted, $apiKeyIv, $isEnabled, $priority, $createdAt, $updatedAt
+        )`,
+        {
+          $id: uuidv4(),
+          $workspaceId: workspaceId,
+          $provider: provider,
+          $apiKeyEncrypted: encrypted,
+          $apiKeyIv: iv,
+          $isEnabled: isEnabled ? 1 : 0,
+          $priority: priority,
+          $createdAt: now,
+          $updatedAt: now,
+        }
+      );
+    }
+    this.saveToDisk();
+  }
+
+  public deleteAIProvider(workspaceId: string, provider: AIProviderName): void {
+    this.db.run(
+      "DELETE FROM workspace_ai_providers WHERE workspace_id = $workspaceId AND provider = $provider",
+      { $workspaceId: workspaceId, $provider: provider }
+    );
+    this.saveToDisk();
+  }
+
+  public getAIProviderApiKey(workspaceId: string, provider: AIProviderName): string | null {
+    const stmt = this.db.prepare(
+      "SELECT api_key_encrypted, api_key_iv FROM workspace_ai_providers WHERE workspace_id = $workspaceId AND provider = $provider AND is_enabled = 1 LIMIT 1"
+    );
+    stmt.bind({ $workspaceId: workspaceId, $provider: provider });
+    let key: string | null = null;
+    if (stmt.step()) {
+      const row = stmt.getAsObject();
+      key = decrypt(row.api_key_encrypted, row.api_key_iv);
+    }
+    stmt.free();
+    return key;
+  }
+
+  public getWooCommerceConnection(workspaceId: string): WooCommerceConnection | null {
+    const stmt = this.db.prepare(
+      "SELECT store_url, is_active, last_sync_at FROM workspace_woocommerce_connections WHERE workspace_id = $workspaceId LIMIT 1"
+    );
+    stmt.bind({ $workspaceId: workspaceId });
+    let connection: WooCommerceConnection | null = null;
+    if (stmt.step()) {
+      const row = stmt.getAsObject();
+      connection = {
+        storeUrl: row.store_url,
+        isActive: row.is_active === 1,
+        lastSyncAt: row.last_sync_at || undefined,
+      };
+    }
+    stmt.free();
+    return connection;
+  }
+
+  public saveWooCommerceConnection(
+    workspaceId: string,
+    storeUrl: string,
+    consumerKey: string,
+    consumerSecret: string,
+    isActive: boolean
+  ): void {
+    const now = new Date().toISOString();
+    const { encrypted: keyEnc, iv: keyIv } = encrypt(consumerKey);
+    const { encrypted: secretEnc, iv: secretIv } = encrypt(consumerSecret);
+    const stmt = this.db.prepare(
+      "SELECT id FROM workspace_woocommerce_connections WHERE workspace_id = $workspaceId LIMIT 1"
+    );
+    stmt.bind({ $workspaceId: workspaceId });
+    const exists = stmt.step();
+    stmt.free();
+    if (exists) {
+      this.db.run(
+        `UPDATE workspace_woocommerce_connections
+         SET store_url = $storeUrl,
+             consumer_key_encrypted = $consumerKeyEncrypted,
+             consumer_key_iv = $consumerKeyIv,
+             consumer_secret_encrypted = $consumerSecretEncrypted,
+             consumer_secret_iv = $consumerSecretIv,
+             is_active = $isActive,
+             updated_at = $updatedAt
+         WHERE workspace_id = $workspaceId`,
+        {
+          $workspaceId: workspaceId,
+          $storeUrl: storeUrl,
+          $consumerKeyEncrypted: keyEnc,
+          $consumerKeyIv: keyIv,
+          $consumerSecretEncrypted: secretEnc,
+          $consumerSecretIv: secretIv,
+          $isActive: isActive ? 1 : 0,
+          $updatedAt: now,
+        }
+      );
+    } else {
+      this.db.run(
+        `INSERT INTO workspace_woocommerce_connections (
+          id, workspace_id, store_url, consumer_key_encrypted, consumer_key_iv,
+          consumer_secret_encrypted, consumer_secret_iv, is_active, created_at, updated_at
+        ) VALUES (
+          $id, $workspaceId, $storeUrl, $consumerKeyEncrypted, $consumerKeyIv,
+          $consumerSecretEncrypted, $consumerSecretIv, $isActive, $createdAt, $updatedAt
+        )`,
+        {
+          $id: uuidv4(),
+          $workspaceId: workspaceId,
+          $storeUrl: storeUrl,
+          $consumerKeyEncrypted: keyEnc,
+          $consumerKeyIv: keyIv,
+          $consumerSecretEncrypted: secretEnc,
+          $consumerSecretIv: secretIv,
+          $isActive: isActive ? 1 : 0,
+          $createdAt: now,
+          $updatedAt: now,
+        }
+      );
+    }
+    this.saveToDisk();
+  }
+
+  public deleteWooCommerceConnection(workspaceId: string): void {
+    this.db.run(
+      "DELETE FROM workspace_woocommerce_connections WHERE workspace_id = $workspaceId",
+      { $workspaceId: workspaceId }
+    );
+    this.saveToDisk();
+  }
+
+  public getWooCommerceCredentials(workspaceId: string): { storeUrl: string; consumerKey: string; consumerSecret: string } | null {
+    const stmt = this.db.prepare(
+      "SELECT store_url, consumer_key_encrypted, consumer_key_iv, consumer_secret_encrypted, consumer_secret_iv FROM workspace_woocommerce_connections WHERE workspace_id = $workspaceId AND is_active = 1 LIMIT 1"
+    );
+    stmt.bind({ $workspaceId: workspaceId });
+    let creds: any = null;
+    if (stmt.step()) {
+      const row = stmt.getAsObject();
+      creds = {
+        storeUrl: row.store_url,
+        consumerKey: decrypt(row.consumer_key_encrypted, row.consumer_key_iv),
+        consumerSecret: decrypt(row.consumer_secret_encrypted, row.consumer_secret_iv),
+      };
+    }
+    stmt.free();
+    return creds;
+  }
+
+  public saveOAuthState(
+    workspaceId: string,
+    platform: string,
+    state: string,
+    redirectUri: string,
+    expiresAt: string
+  ): void {
+    this.db.run(
+      `INSERT INTO oauth_states (id, workspace_id, platform, state, redirect_uri, created_at, expires_at)
+       VALUES ($id, $workspaceId, $platform, $state, $redirectUri, $createdAt, $expiresAt)`,
+      {
+        $id: uuidv4(),
+        $workspaceId: workspaceId,
+        $platform: platform,
+        $state: state,
+        $redirectUri: redirectUri,
+        $createdAt: new Date().toISOString(),
+        $expiresAt: expiresAt,
+      }
+    );
+    this.saveToDisk();
+  }
+
+  public getOAuthState(state: string): { workspaceId: string; platform: string; redirectUri: string } | null {
+    const stmt = this.db.prepare(
+      "SELECT workspace_id, platform, redirect_uri FROM oauth_states WHERE state = $state AND expires_at > datetime('now') LIMIT 1"
+    );
+    stmt.bind({ $state: state });
+    let result: any = null;
+    if (stmt.step()) {
+      const row = stmt.getAsObject();
+      result = {
+        workspaceId: row.workspace_id,
+        platform: row.platform,
+        redirectUri: row.redirect_uri,
+      };
+    }
+    stmt.free();
+    return result;
+  }
+
+  public deleteOAuthState(state: string): void {
+    this.db.run("DELETE FROM oauth_states WHERE state = $state", { $state: state });
     this.saveToDisk();
   }
 }

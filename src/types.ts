@@ -1079,3 +1079,56 @@ export interface SocialIntelligenceResult {
   creativeIdeas: CreativeIdea[];
   generatedAt: string;
 }
+
+// ─── Integration Center Types (Phase 1) ──────────────────────────────
+
+/**
+ * Supported AI providers for the Integration Center.
+ */
+export type AIProviderName = "deepseek" | "gemini" | "openai" | "kling";
+
+/**
+ * Configuration for a single AI provider.
+ */
+export interface AIProviderConfig {
+  provider: AIProviderName;
+  isEnabled: boolean;
+  priority: number;
+  hasApiKey: boolean; // whether a key is stored (we don't expose the key itself)
+}
+
+/**
+ * WooCommerce store connection details.
+ */
+export interface WooCommerceConnection {
+  storeUrl: string;
+  isActive: boolean;
+  lastSyncAt?: string;
+}
+
+/**
+ * OAuth state for social platform authorization.
+ */
+export interface OAuthState {
+  workspaceId: string;
+  platform: string;
+  state: string;
+  redirectUri: string;
+  expiresAt: string;
+}
+
+/**
+ * Overall integration status for a workspace.
+ */
+export interface IntegrationStatus {
+  aiProviders: AIProviderConfig[];
+  socialPlatforms: Array<{
+    platform: SocialPlatform;
+    connected: boolean;
+    username?: string;
+  }>;
+  ecommerce: {
+    shopify: { connected: boolean; shopDomain?: string };
+    woocommerce: WooCommerceConnection | null;
+  };
+}
