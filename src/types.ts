@@ -1086,6 +1086,11 @@ export interface SocialIntelligenceResult {
  * Supported AI providers for the Integration Center.
  */
 export type AIProviderName = "deepseek" | "gemini" | "openai" | "kling";
+export type AIWorkflow =
+  | "standard"
+  | "advanced_reasoning"
+  | "video"
+  | "image";
 
 /**
  * Configuration for a single AI provider.
@@ -1095,7 +1100,13 @@ export interface AIProviderConfig {
   isEnabled: boolean;
   priority: number;
   hasApiKey: boolean; // whether a key is stored (we don't expose the key itself)
-}
+  
+ preferredProvider?: AIProviderName;
+workflow?: AIWorkflow;
+allowFallbacks?: boolean;
+modelName?: string;
+temperature?: number; 
+}  
 
 /**
  * WooCommerce store connection details.
