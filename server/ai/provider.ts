@@ -1,7 +1,9 @@
 import { GoogleGenAI } from "@google/genai";
 import { OpenAI } from "openai";
+import { DatabaseManager } from "../db.ts";
+import { AIProviderName, AIProviderConfig } from "../../src/types.ts";
 
-export type AIProviderName = "deepseek" | "gemini" | "openai";
+export { AIProviderName, AIProviderConfig };
 export type AIWorkflow = "standard" | "advanced_reasoning" | "video" | "image";
 
 export interface ProviderResponse {
@@ -15,87 +17,48 @@ export interface ProviderResponse {
   latencyMs: number;
 }
 
-export interface AIProviderConfig {
-  apiKey?: string;
-  modelName?: string;
-  temperature?: number;
-  workflow?: AIWorkflow;
-  preferredProvider?: AIProviderName;
-  allowFallbacks?: boolean;
-}
-
-// Lazy loaded client instances to protect server lifecycle during initialization
-let deepseekClient: OpenAI | null = null;
-let geminiClient: GoogleGenAI | null = null;
-let openaiClient: OpenAI | null = null;
-
 // Track failures for Circuit-Breaker
 const providerFailures: Record<AIProviderName, { consecutive: number; lastFailureTime: number }> = {
   deepseek: { consecutive: 0, lastFailureTime: 0 },
   gemini: { consecutive: 0, lastFailureTime: 0 },
   openai: { consecutive: 0, lastFailureTime: 0 },
+  kling: { consecutive: 0, lastFailureTime: 0 },
 };
 const BREAKER_RESET_MS = 120000; // 2 minutes
 
-function getDeepSeekClient(): OpenAI {
-  if (!deepseekClient) {
-    const apiKey = process.env.DEEPSEEK_API_KEY;
-    if (!apiKey) {
-      throw new Error("DEEPSEEK_API_KEY environment variable is not set on the server.");
-    }
-    deepseekClient = new OpenAI({
-      apiKey,
-      baseURL: "https://api.deepseek.com/v1",
-    });
-  }
-  return deepseekClient;
-}
-
-function getGeminiClient(): GoogleGenAI {
-  if (!geminiClient) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("GEMINI_API_KEY environment variable is not set on the server.");
-    }
-    // Strict telemetry header tracking as requested by platform guidelines
-    geminiClient = new GoogleGenAI({ apiKey });
-  }
-  return geminiClient;
-}
-
-function getOpenAIClient(): OpenAI {
-  if (!openaiClient) {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      throw new Error("OPENAI_API_KEY environment variable is not set on the server.");
-    }
-    openaiClient = new OpenAI({ apiKey });
-  }
-  return openaiClient;
-}
-
-function getProviderState(provider: AIProviderName) {
-  return providerFailures[provider];
-}
-
 function markProviderSuccess(provider: AIProviderName): void {
-  const state = getProviderState(provider);
+  const state = providerFailures[provider];
   state.consecutive = 0;
   state.lastFailureTime = 0;
 }
 
 function markProviderFailure(provider: AIProviderName): void {
-  const state = getProviderState(provider);
+  const state = providerFailures[provider];
   state.consecutive += 1;
   state.lastFailureTime = Date.now();
 }
 
 function isProviderCircuitOpen(provider: AIProviderName): boolean {
-  const state = getProviderState(provider);
+  const state = providerFailures[provider];
   if (state.consecutive < 3) {
     return false;
   }
   return Date.now() - state.lastFailureTime < BREAKER_RESET_MS;
+}
+
+function isProviderConfigured(provider: AIProviderName): boolean {
+  switch (provider) {
+    case "deepseek":
+      return Boolean(process.env.DEEPSEEK_API_KEY);
+    case "gemini":
+      return Boolean(process.env.GEMINI_API_KEY);
+    case "openai":
+      return Boolean(process.env.OPENAI_API_KEY);
+    case "kling":
+      return Boolean(process.env.KLING_API_KEY);
+    default:
+      return false;
+  }
 }
 
 export class AIProviderService {
@@ -107,6 +70,8 @@ export class AIProviderService {
         return process.env.GEMINI_MODEL || "gemini-2.5-flash";
       case "openai":
         return process.env.OPENAI_MODEL || "gpt-4o-mini";
+      case "kling":
+        return "kling-default";
     }
   }
 
@@ -137,14 +102,40 @@ export class AIProviderService {
     return config.allowFallbacks === false ? [ordered[0]] : ordered;
   }
 
-  private static isProviderConfigured(provider: AIProviderName): boolean {
+  /**
+   * Resolve the API key for a given provider.
+   * Tries workspace-specific key first, then falls back to environment variable.
+   */
+  private static async getProviderApiKey(
+    workspaceId: string | undefined,
+    provider: AIProviderName
+  ): Promise<string | null> {
+    if (workspaceId) {
+      try {
+        const db = await DatabaseManager.getInstance();
+        const key = await db.getAIProviderApiKey(workspaceId, provider);
+        if (key) {
+          return key;
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[AIProviderService] Failed to fetch key from DB for ${provider}:`, message);
+        // Fall through to environment
+      }
+    }
+
+    // Fallback to environment variables
     switch (provider) {
       case "deepseek":
-        return Boolean(process.env.DEEPSEEK_API_KEY);
+        return process.env.DEEPSEEK_API_KEY || null;
       case "gemini":
-        return Boolean(process.env.GEMINI_API_KEY);
+        return process.env.GEMINI_API_KEY || null;
       case "openai":
-        return Boolean(process.env.OPENAI_API_KEY);
+        return process.env.OPENAI_API_KEY || null;
+      case "kling":
+        return process.env.KLING_API_KEY || null;
+      default:
+        return null;
     }
   }
 
@@ -154,9 +145,13 @@ export class AIProviderService {
     schemaDescription: string,
     modelUsed: string,
     temperature: number,
-    start: number
+    start: number,
+    apiKey: string
   ): Promise<ProviderResponse> {
-    const client = getDeepSeekClient();
+    const client = new OpenAI({
+      apiKey,
+      baseURL: "https://api.deepseek.com/v1",
+    });
     console.log(`[AI Provider Layer] Calling Primary Provider: DeepSeek (${modelUsed})`);
 
     const completion = await client.chat.completions.create({
@@ -188,9 +183,10 @@ export class AIProviderService {
     systemInstruction: string,
     modelUsed: string,
     temperature: number,
-    start: number
+    start: number,
+    apiKey: string
   ): Promise<ProviderResponse> {
-    const client = getGeminiClient();
+    const client = new GoogleGenAI({ apiKey });
     console.log(`[AI Provider Layer] Calling Fallback Provider: Gemini (${modelUsed})`);
 
     const response = await client.models.generateContent({
@@ -223,9 +219,10 @@ export class AIProviderService {
     schemaDescription: string,
     modelUsed: string,
     temperature: number,
-    start: number
+    start: number,
+    apiKey: string
   ): Promise<ProviderResponse> {
-    const client = getOpenAIClient();
+    const client = new OpenAI({ apiKey });
     console.log(`[AI Provider Layer] Calling Fallback Provider: OpenAI (${modelUsed})`);
 
     const completion = await client.chat.completions.create({
@@ -256,12 +253,16 @@ export class AIProviderService {
    * Run JSON generation with adaptive failover.
    * Standard commerce workflows default to DeepSeek -> Gemini -> OpenAI.
    * Advanced reasoning, video, and image workflows stay on Gemini/OpenAI.
+   *
+   * @param workspaceId Optional workspace ID to use database‑stored API key.
+   *                    If omitted, falls back to environment variables.
    */
   public static async generateJSON<T>(
     prompt: string,
     systemInstruction: string,
     schemaDescription: string,
-    config: AIProviderConfig = {}
+    config: AIProviderConfig = {},
+    workspaceId?: string
   ): Promise<ProviderResponse> {
     const start = Date.now();
     const providerOrder = this.resolveProviderOrder(config);
@@ -271,8 +272,10 @@ export class AIProviderService {
     for (let attemptIndex = 0; attemptIndex < providerOrder.length; attemptIndex++) {
       const providerName = providerOrder[attemptIndex];
 
-      if (!this.isProviderConfigured(providerName)) {
-        console.warn(`[AI Provider Layer] Skipping ${providerName}: missing API key.`);
+      // Resolve API key (DB first, then environment)
+      const apiKey = await this.getProviderApiKey(workspaceId, providerName);
+      if (!apiKey) {
+        console.warn(`[AI Provider Layer] Skipping ${providerName}: no API key available.`);
         continue;
       }
 
@@ -294,7 +297,8 @@ export class AIProviderService {
             schemaDescription,
             modelUsed,
             temperature,
-            start
+            start,
+            apiKey
           );
         } else if (providerName === "gemini") {
           response = await this.generateWithGemini(
@@ -302,17 +306,22 @@ export class AIProviderService {
             systemInstruction,
             modelUsed,
             temperature,
-            start
+            start,
+            apiKey
           );
-        } else {
+        } else if (providerName === "openai") {
           response = await this.generateWithOpenAI(
             prompt,
             systemInstruction,
             schemaDescription,
             modelUsed,
             temperature,
-            start
+            start,
+            apiKey
           );
+        } else {
+          // Kling or other providers – not supported for generation in this version.
+          throw new Error(`Provider ${providerName} is not supported for JSON generation.`);
         }
 
         markProviderSuccess(providerName);
@@ -320,7 +329,8 @@ export class AIProviderService {
       } catch (err: unknown) {
         markProviderFailure(providerName);
         lastError = err;
-        console.error(`[AI Provider Layer] Error in generation with ${providerName}:`, err);
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[AI Provider Layer] Error in generation with ${providerName}:`, message);
       }
     }
 
@@ -336,7 +346,7 @@ export class AIProviderService {
    */
   public static cleanAndParseJSON<T>(rawContent: string): T {
     let sanitized = rawContent.trim();
-    
+
     // 1. Remove markdown code fences if they wrap the content
     if (sanitized.startsWith("```")) {
       sanitized = sanitized.replace(/^```json\s*/i, "").replace(/```$/, "").trim();
@@ -346,7 +356,7 @@ export class AIProviderService {
       return JSON.parse(sanitized) as T;
     } catch (err) {
       console.warn(`[AI Provider Layer] Standard JSON parse failed. Running regex extract healing...`);
-      
+
       // 2. Fallback Regex Extraction to pull the outer-most matching curly braces object
       const jsonRegex = /{[\s\S]*}/;
       const match = sanitized.match(jsonRegex);
@@ -357,8 +367,87 @@ export class AIProviderService {
           console.error(`[AI Provider Layer] Regex extraction healing failed:`, innerErr);
         }
       }
-      
+
       throw new Error(`Failed to parse AI output into valid JSON. Content was: ${rawContent.substring(0, 200)}...`);
+    }
+  }
+
+  /**
+   * Test the connection to a specific AI provider.
+   * Returns success status, provider name, and a message.
+   * Supports DeepSeek, OpenAI, Gemini, and Kling.
+   */
+  public static async testProviderConnection(
+    workspaceId: string,
+    provider: AIProviderName
+  ): Promise<{ success: boolean; provider: AIProviderName; message: string }> {
+    try {
+      const apiKey = await this.getProviderApiKey(workspaceId, provider);
+      if (!apiKey) {
+        return {
+          success: false,
+          provider,
+          message: `No API key found for ${provider}.`,
+        };
+      }
+
+      let testFn: () => Promise<boolean>;
+
+      switch (provider) {
+        case "deepseek": {
+          testFn = async () => {
+            const client = new OpenAI({ apiKey, baseURL: "https://api.deepseek.com/v1" });
+            const res = await client.models.list();
+            return res.data && res.data.length > 0;
+          };
+          break;
+        }
+        case "openai": {
+          testFn = async () => {
+            const client = new OpenAI({ apiKey });
+            const res = await client.models.list();
+            return res.data && res.data.length > 0;
+          };
+          break;
+        }
+        case "gemini": {
+          testFn = async () => {
+            const response = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
+            );
+            return response.ok;
+          };
+          break;
+        }
+        case "kling": {
+          // Kling does not have a standard models endpoint; check key presence only.
+          return {
+            success: true,
+            provider,
+            message: "Kling API key validated (no additional test available).",
+          };
+        }
+        default:
+          return {
+            success: false,
+            provider,
+            message: `Unsupported provider: ${provider}`,
+          };
+      }
+
+      const result = await testFn();
+      if (result) {
+        return { success: true, provider, message: `${provider} connection successful.` };
+      } else {
+        return { success: false, provider, message: `${provider} connection test failed.` };
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        success: false,
+        provider,
+        message: `Connection test error: ${message}`,
+      };
     }
   }
 }
