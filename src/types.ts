@@ -935,3 +935,147 @@ export function createEmptyBrandIntelligence(brandName: string = "Brand"): Brand
     },
   };
 }
+
+// ─── Social Intelligence Types (Phase 1) ──────────────────────────────
+
+/**
+ * Platform-specific content for a single social platform.
+ */
+export interface PlatformContent {
+  platform: SocialPlatform;
+  caption: string;
+  headline?: string;
+  tone: string;
+  suggestedMediaType: "image" | "video" | "carousel";
+}
+
+/**
+ * A single hook variant with reasoning.
+ */
+export interface HookVariant {
+  type: "emotional" | "curiosity" | "problem_solution" | "urgency" | "viral";
+  content: string;
+  reasoning: string;
+}
+
+/**
+ * Call-to-action suggestion for a specific platform.
+ */
+export interface CTASuggestion {
+  platform: SocialPlatform;
+  text: string;
+  urgency: "low" | "medium" | "high";
+  actionType: "link" | "comment" | "save" | "pin" | "share";
+}
+
+/**
+ * Hashtag set per platform with competition metadata.
+ */
+export interface HashtagSet {
+  platform: SocialPlatform;
+  tags: string[];
+  competition: "low" | "medium" | "high";
+  volume: number;
+  trending: boolean;
+}
+
+/**
+ * Competitor intelligence analysis.
+ */
+export interface CompetitorIntelligence {
+  competitorAngles: string[];
+  marketSaturation: number;
+  contentOpportunityScore: number;
+  topPerformingThemes: string[];
+  whitespaceAreas: string[];
+}
+
+/**
+ * Target audience intelligence.
+ */
+export interface AudienceIntelligence {
+  targetAudience: string;
+  ageRange: string;
+  interests: string[];
+  buyerIntent: "low" | "medium" | "high";
+  painPoints: string[];
+  motivators: string[];
+}
+
+/**
+ * Viral potential score with breakdown.
+ */
+export interface ViralScoreResult {
+  score: number;
+  explanation: string;
+  factors: {
+    hookStrength: number;
+    emotionalResonance: number;
+    trendAlignment: number;
+    shareability: number;
+  };
+}
+
+/**
+ * Winning product score with breakdown.
+ */
+export interface WinningProductScoreResult {
+  score: number;
+  explanation: string;
+  factors: {
+    demand: number;
+    competition: number;
+    profitMargin: number;
+    uniqueness: number;
+    marketFit: number;
+  };
+}
+
+/**
+ * Product angles for marketing positioning.
+ */
+export interface ProductAngles {
+  problemSolution: string;
+  emotional: string;
+  luxury: string;
+  savings: string;
+  convenience: string;
+}
+
+/**
+ * Country recommendation with reasoning.
+ */
+export interface CountryRecommendation {
+  country: string;
+  score: number;
+  reason: string;
+}
+
+/**
+ * Creative idea for video or image generation (Kling AI ready).
+ */
+export interface CreativeIdea {
+  hook: string;
+  sceneIdea: string;
+  videoIdea: string;
+}
+
+/**
+ * Full social intelligence result for a product.
+ */
+export interface SocialIntelligenceResult {
+  productId: string;
+  workspaceId?: string;
+  platformContent: PlatformContent[];
+  hooks: HookVariant[];
+  ctas: CTASuggestion[];
+  hashtags: HashtagSet[];
+  competitor: CompetitorIntelligence;
+  audience: AudienceIntelligence;
+  viralScore: ViralScoreResult;
+  winningProductScore: WinningProductScoreResult;
+  productAngles: ProductAngles;
+  countryRecommendations: CountryRecommendation[];
+  creativeIdeas: CreativeIdea[];
+  generatedAt: string;
+}
