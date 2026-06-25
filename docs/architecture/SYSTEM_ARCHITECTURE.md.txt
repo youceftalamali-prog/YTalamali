@@ -1,0 +1,298 @@
+# AuraPost AI Enterprise
+
+# SYSTEM ARCHITECTURE
+
+Version: 1.0
+
+Status: Draft
+
+Created: 2026-06-25
+
+--------------------------------------------------
+
+# Architecture Philosophy
+
+AuraPost AI is designed as an Enterprise SaaS platform.
+
+The architecture follows these principles:
+
+- Security First
+- Modular Design
+- Service Separation
+- Multi-Tenant
+- API First
+- AI Native
+- Cloud Native
+- Production Ready
+
+--------------------------------------------------
+
+# High Level Architecture
+
+Client
+
+?
+
+Frontend (React)
+
+?
+
+REST API
+
+?
+
+Application Layer
+
+?
+
+Business Services
+
+?
+
+Database
+
+?
+
+External Providers
+
+--------------------------------------------------
+
+# Frontend
+
+Responsibilities
+
+- Authentication
+- Dashboard
+- Product Management
+- Marketplace
+- Billing
+- Analytics
+- AI Studio
+- Image Studio
+- Video Studio
+- Queue
+- Settings
+
+The frontend never accesses the database directly.
+
+--------------------------------------------------
+
+# Backend
+
+Responsibilities
+
+Authentication
+
+Authorization
+
+Business Logic
+
+Validation
+
+Queue
+
+Billing
+
+Marketplace
+
+Shopify
+
+WooCommerce
+
+AI Providers
+
+Analytics
+
+--------------------------------------------------
+
+# Database
+
+Responsibilities
+
+Users
+
+Workspaces
+
+Products
+
+Billing
+
+Credits
+
+Orders
+
+Marketplace
+
+Queue
+
+Audit Logs
+
+AI Providers
+
+Content
+
+Videos
+
+Images
+
+--------------------------------------------------
+
+# Authentication Layer
+
+Login
+
+Register
+
+JWT
+
+Refresh Token
+
+Sessions
+
+Roles
+
+Permissions
+
+Workspace Isolation
+
+--------------------------------------------------
+
+# AI Layer
+
+Supported Providers
+
+OpenAI
+
+Gemini
+
+DeepSeek
+
+Kling
+
+Future Providers
+
+Claude
+
+Mistral
+
+Llama
+
+--------------------------------------------------
+
+# Marketplace Layer
+
+Amazon
+
+AliExpress
+
+Alibaba
+
+eBay
+
+Shopify
+
+WooCommerce
+
+Future Platforms
+
+Temu
+
+Etsy
+
+TikTok Shop
+
+--------------------------------------------------
+
+# Billing Layer
+
+Stripe
+
+Subscriptions
+
+Invoices
+
+Credits
+
+Usage
+
+Plans
+
+--------------------------------------------------
+
+# Queue Layer
+
+Workers
+
+Retry
+
+Dead Letter Queue
+
+Scheduler
+
+Automation
+
+--------------------------------------------------
+
+# Security Layer
+
+JWT
+
+Password Hashing
+
+Encryption
+
+Rate Limiting
+
+CSRF
+
+CORS
+
+Validation
+
+Logging
+
+Audit
+
+--------------------------------------------------
+
+# Production Layer
+
+Docker
+
+Google Cloud Run
+
+PostgreSQL
+
+Monitoring
+
+Logging
+
+CI/CD
+
+Backups
+
+--------------------------------------------------
+
+# Future Architecture
+
+Microservices
+
+Redis
+
+RabbitMQ
+
+Kubernetes
+
+CDN
+
+Caching
+
+WebSockets
+
+--------------------------------------------------
+
+Architecture Status
+
+Enterprise Design Approved
+
+Version 1.0

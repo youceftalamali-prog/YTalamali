@@ -1,0 +1,107 @@
+# AuraPost AI Enterprise
+
+# PERMISSION DATABASE SCHEMA
+
+Version: 1.0
+
+Status: Draft
+
+Created: 2026-06-25
+
+---
+
+# Purpose
+
+This document defines the Permission entity.
+
+Permissions represent the smallest security unit inside AuraPost AI.
+
+Every action executed inside the platform requires a permission.
+
+---
+
+# Permission Table
+
+Table Name
+
+permissions
+
+Columns
+
+id
+
+name
+
+code
+
+service
+
+description
+
+is_system
+
+created_at
+
+updated_at
+
+---
+
+# Permission Code Format
+
+service.action
+
+Examples
+
+users.read
+
+users.create
+
+users.update
+
+users.delete
+
+products.read
+
+products.create
+
+products.update
+
+products.delete
+
+shopify.connect
+
+facebook.publish
+
+analytics.view
+
+billing.manage
+
+ai.generate
+
+automation.execute
+
+---
+
+# Rules
+
+Permission codes must be unique.
+
+Permissions cannot belong to multiple services.
+
+System permissions cannot be deleted.
+
+Every API endpoint must require one or more permissions.
+
+---
+
+# Relationships
+
+Permission
+
+?
+
+Many To Many
+
+?
+
+Role

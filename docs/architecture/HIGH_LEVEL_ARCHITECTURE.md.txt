@@ -1,0 +1,108 @@
+# AuraPost AI Enterprise
+
+# HIGH LEVEL ARCHITECTURE
+
+Version: 1.0
+
+Status: Draft
+
+Created: 2026-06-25
+
+---
+
+# Purpose
+
+This document describes the overall architecture of AuraPost AI.
+
+It defines all major platform components and how they communicate.
+
+Every subsystem must follow this architecture.
+
+---
+
+# Platform Layers
+
+Presentation Layer
+
+?
+
+API Gateway
+
+?
+
+Application Services
+
+?
+
+Business Logic
+
+?
+
+Data Layer
+
+?
+
+External Services
+
+---
+
+# Core Services
+
+- Identity Service
+- Workspace Service
+- Product Import Service
+- Marketplace Intelligence Service
+- AI Content Service
+- AI Image Service
+- AI Video Service
+- Publishing Service
+- Analytics Service
+- Billing Service
+- Notification Service
+- Automation Service
+
+---
+
+# External Integrations
+
+- Shopify
+- WooCommerce
+- TikTok
+- Facebook
+- Instagram
+- OpenAI
+- Google Gemini
+- Stripe
+- Supabase Storage
+
+---
+
+# Database
+
+Primary Database:
+
+PostgreSQL
+
+Cache:
+
+Redis (Future)
+
+Queue:
+
+Background Jobs
+
+Storage:
+
+Supabase Storage
+
+---
+
+# Architecture Principles
+
+- API First
+- Security First
+- Modular Design
+- Enterprise Ready
+- AI Native
+- Cloud Native
+- Multi Tenant

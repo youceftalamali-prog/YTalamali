@@ -1,0 +1,155 @@
+# AuraPost AI Enterprise
+
+# DEVELOPMENT RULES
+
+Version: 1.0
+
+Status: Active
+
+Created: 2026-06-25
+
+---
+
+# Purpose
+
+This document defines the official engineering rules for AuraPost AI.
+
+Every contributor must follow these rules before modifying any part of the project.
+
+These rules are mandatory.
+
+---
+
+# Rule 1
+
+Architecture First
+
+No feature may be implemented before its architecture is documented.
+
+---
+
+# Rule 2
+
+Documentation Before Code
+
+Every major feature requires official documentation.
+
+---
+
+# Rule 3
+
+One Responsibility Per Module
+
+Each module must have one clear responsibility.
+
+---
+
+# Rule 4
+
+No Direct Database Changes
+
+Database changes require documentation first.
+
+---
+
+# Rule 5
+
+API First
+
+Every backend feature starts with API design.
+
+---
+
+# Rule 6
+
+Security By Default
+
+Every new feature must be secure by default.
+
+---
+
+# Rule 7
+
+No Mock Data In Production
+
+Production code must never depend on fake data.
+
+---
+
+# Rule 8
+
+Backward Compatibility
+
+Existing functionality must not be broken without approval.
+
+---
+
+# Rule 9
+
+Small Pull Requests
+
+Large changes must be divided into smaller units.
+
+---
+
+# Rule 10
+
+Code Review Required
+
+Every important change must be reviewed before merging.
+
+---
+
+# Rule 11
+
+Testing Before Release
+
+No feature may reach production without testing.
+
+---
+
+# Rule 12
+
+Performance Matters
+
+Every implementation should consider scalability.
+
+---
+
+# Rule 13
+
+Every Decision Must Be Traceable
+
+Major architectural decisions must be documented.
+
+---
+
+# Rule 14
+
+Security Review Required
+
+Authentication
+
+Authorization
+
+Encryption
+
+Sessions
+
+Cookies
+
+API Security
+
+must always be reviewed.
+
+---
+
+# Rule 15
+
+Long-Term Maintainability
+
+The project must always prioritize maintainability over short-term speed.
+
+---
+
+End of Document

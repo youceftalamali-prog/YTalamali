@@ -1,0 +1,45 @@
+# ADR-001 - Platform Architecture
+
+Status: Accepted
+
+Date: 2026-06-25
+
+---
+
+# Context
+
+AuraPost AI started as a traditional web application.
+
+As the project grew, new modules such as Product Import, AI Content Generation, Marketplace Intelligence, Billing, Automation and Analytics required an architecture capable of long-term scalability.
+
+---
+
+# Decision
+
+AuraPost AI will be designed as a Modular Enterprise SaaS Platform.
+
+The system will consist of independent services connected through a unified API and a shared enterprise database.
+
+Every new feature must belong to an existing service or introduce a new service with documented responsibilities.
+
+---
+
+# Consequences
+
+Advantages:
+
+- High scalability
+- Easier maintenance
+- Better security
+- Independent modules
+- Enterprise-ready architecture
+- Easier testing
+- Future microservices migration
+
+Disadvantages:
+
+- More architectural planning
+- More documentation
+- Higher initial complexity
+
+These disadvantages are accepted because they provide long-term stability.

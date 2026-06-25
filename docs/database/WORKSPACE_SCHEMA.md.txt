@@ -1,0 +1,101 @@
+# AuraPost AI Enterprise
+
+# WORKSPACE DATABASE SCHEMA
+
+Version: 1.0
+
+Status: Draft
+
+Created: 2026-06-25
+
+---
+
+# Purpose
+
+This document defines the Workspace entity.
+
+Every resource inside AuraPost belongs to exactly one Workspace.
+
+Workspace is the highest business entity of the platform.
+
+---
+
+# Workspace Table
+
+Table Name:
+
+workspaces
+
+Primary Key:
+
+workspace_id (UUID)
+
+---
+
+Columns
+
+- workspace_id
+- workspace_name
+- workspace_slug
+- owner_user_id
+- subscription_plan
+- subscription_status
+- credits_balance
+- ai_provider
+- timezone
+- language
+- currency
+- country
+- created_at
+- updated_at
+- deleted_at
+
+---
+
+Relationships
+
+Workspace
+
+?
+
+Users
+
+?
+
+Stores
+
+?
+
+Products
+
+?
+
+Marketplace Intelligence
+
+?
+
+AI Requests
+
+?
+
+Publishing
+
+?
+
+Analytics
+
+?
+
+Billing
+
+?
+
+Credits
+
+?
+
+Notifications
+
+?
+
+Automation

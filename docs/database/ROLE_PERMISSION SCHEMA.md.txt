@@ -1,0 +1,113 @@
+# AuraPost AI Enterprise
+
+# ROLE PERMISSION DATABASE SCHEMA
+
+Version: 1.0
+
+Status: Draft
+
+Created: 2026-06-25
+
+---
+
+# Purpose
+
+This document defines the relationship between Roles and Permissions.
+
+AuraPost AI uses Role-Based Access Control (RBAC).
+
+Roles receive permissions.
+
+Users receive roles.
+
+Users never receive permissions directly.
+
+---
+
+# Table Name
+
+role_permissions
+
+---
+
+# Columns
+
+id
+
+role_id
+
+permission_id
+
+created_at
+
+---
+
+# Relationships
+
+Role
+
+?
+
+Many To Many
+
+?
+
+Permission
+
+---
+
+# Example
+
+Administrator
+
+?
+
+All Permissions
+
+Manager
+
+?
+
+Products
+
+Stores
+
+Analytics
+
+Editor
+
+?
+
+Products
+
+Publishing
+
+Viewer
+
+?
+
+Read Only
+
+---
+
+# Rules
+
+Each role can have multiple permissions.
+
+Each permission can belong to multiple roles.
+
+Duplicate role-permission assignments are not allowed.
+
+Deleting a role removes all related assignments.
+
+Deleting a permission removes all related assignments.
+
+---
+
+# Security
+
+Authorization must always verify permissions.
+
+Role validation must occur before every protected API request.
+
+Permission checks must never be bypassed.

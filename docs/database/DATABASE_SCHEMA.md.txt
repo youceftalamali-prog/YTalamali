@@ -1,0 +1,58 @@
+# AuraPost AI Enterprise
+
+# DATABASE SCHEMA
+
+Version: 1.0
+
+Status: Draft
+
+Created: 2026-06-25
+
+---
+
+# Purpose
+
+This document defines the official database schema of AuraPost AI.
+
+No database table may be created before being documented here.
+
+---
+
+# Core Database Modules
+
+- Identity
+- Workspaces
+- Users
+- Roles
+- Permissions
+- Stores
+- Products
+- Product Imports
+- Marketplace Intelligence
+- AI Providers
+- AI Requests
+- Content Generation
+- Images
+- Videos
+- Publishing
+- Social Accounts
+- Analytics
+- Billing
+- Credits
+- Notifications
+- Automation
+- Queue
+- Audit Logs
+
+---
+
+# Database Principles
+
+- PostgreSQL
+- UUID Primary Keys
+- Foreign Keys
+- Soft Delete
+- Created At
+- Updated At
+- Audit Logging
+- Multi-Tenant Isolation

@@ -1,0 +1,268 @@
+# AuraPost AI Enterprise
+
+# DATABASE DESIGN
+
+Version: 1.0
+
+Status: Draft
+
+Created: 2026-06-25
+
+--------------------------------------------------
+
+# Database Philosophy
+
+AuraPost AI uses a relational PostgreSQL database.
+
+The database must support:
+
+- Multi Tenant
+- High Performance
+- Enterprise Security
+- Scalability
+- AI Operations
+- Marketplace Automation
+
+--------------------------------------------------
+
+# Core Modules
+
+Users
+
+Roles
+
+Permissions
+
+Workspaces
+
+Authentication
+
+Products
+
+Marketplace
+
+Analytics
+
+Billing
+
+Credits
+
+Queue
+
+Videos
+
+Images
+
+Content
+
+AI Providers
+
+Audit Logs
+
+Settings
+
+--------------------------------------------------
+
+# Multi Tenant Design
+
+Each workspace owns:
+
+Users
+
+Products
+
+Credits
+
+Billing
+
+AI Providers
+
+Marketplace Data
+
+Analytics
+
+Queue Jobs
+
+Content
+
+Media
+
+Isolation is mandatory.
+
+--------------------------------------------------
+
+# Authentication Tables
+
+users
+
+roles
+
+permissions
+
+user_sessions
+
+refresh_tokens
+
+password_reset_tokens
+
+email_verification_tokens
+
+login_history
+
+--------------------------------------------------
+
+# Workspace Tables
+
+workspaces
+
+workspace_members
+
+workspace_roles
+
+workspace_settings
+
+--------------------------------------------------
+
+# Commerce Tables
+
+products
+
+product_images
+
+product_variants
+
+collections
+
+orders
+
+customers
+
+suppliers
+
+competitors
+
+--------------------------------------------------
+
+# AI Tables
+
+workspace_ai_providers
+
+content_generations
+
+image_generations
+
+video_generations
+
+prompt_templates
+
+--------------------------------------------------
+
+# Billing Tables
+
+billing_subscriptions
+
+billing_invoices
+
+payment_history
+
+credit_pools
+
+credit_ledger
+
+--------------------------------------------------
+
+# Queue Tables
+
+queue_jobs
+
+queue_logs
+
+queue_workers
+
+dead_letter_jobs
+
+--------------------------------------------------
+
+# Marketplace Tables
+
+amazon_products
+
+aliexpress_products
+
+alibaba_products
+
+ebay_products
+
+shopify_products
+
+woocommerce_products
+
+--------------------------------------------------
+
+# Analytics Tables
+
+analytics_events
+
+product_analytics
+
+marketplace_analytics
+
+usage_statistics
+
+--------------------------------------------------
+
+# Security Tables
+
+audit_logs
+
+api_keys
+
+webhooks
+
+oauth_states
+
+--------------------------------------------------
+
+# Database Rules
+
+Every table must have
+
+id
+
+created_at
+
+updated_at
+
+workspace_id (where applicable)
+
+Indexes must exist on:
+
+workspace_id
+
+user_id
+
+created_at
+
+status
+
+Foreign Keys are mandatory.
+
+--------------------------------------------------
+
+Future Database
+
+Redis
+
+Vector Database
+
+Search Index
+
+Event Store
+
+--------------------------------------------------
+
+Status
+
+Approved for Implementation
+
+Version 1.0

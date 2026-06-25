@@ -1,0 +1,74 @@
+
+# AuraPost AI Enterprise
+
+# ROLE DATABASE SCHEMA
+
+Version: 1.0
+
+Status: Draft
+
+Created: 2026-06-25
+
+---
+
+# Purpose
+
+This document defines user roles inside AuraPost AI.
+
+Every user must have exactly one role.
+
+Roles define what users are allowed to do inside the platform.
+
+---
+
+# Role Table
+
+Table Name:
+
+roles
+
+Primary Key:
+
+role_id (UUID)
+
+---
+
+Columns
+
+- role_id
+- workspace_id
+- role_name
+- role_description
+- is_system_role
+- created_at
+- updated_at
+
+---
+
+Default Roles
+
+- Owner
+- Admin
+- Manager
+- Editor
+- Analyst
+- Support
+- Viewer
+
+---
+
+Relationships
+
+Workspace
+
+?
+
+Roles
+
+?
+
+Users
+
+?
+
+Permissions

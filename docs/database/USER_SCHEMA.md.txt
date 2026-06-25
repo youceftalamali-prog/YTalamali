@@ -1,0 +1,83 @@
+
+# AuraPost AI Enterprise
+
+# USER DATABASE SCHEMA
+
+Version: 1.0
+
+Status: Draft
+
+Created: 2026-06-25
+
+---
+
+# Purpose
+
+This document defines the User entity.
+
+Every user belongs to exactly one Workspace.
+
+Users access AuraPost according to their assigned role and permissions.
+
+---
+
+# User Table
+
+Table Name:
+
+users
+
+Primary Key:
+
+user_id (UUID)
+
+---
+
+Columns
+
+- user_id
+- workspace_id
+- first_name
+- last_name
+- email
+- password_hash
+- avatar_url
+- role_id
+- status
+- email_verified
+- last_login
+- timezone
+- language
+- created_at
+- updated_at
+- deleted_at
+
+---
+
+Relationships
+
+Workspace
+
+?
+
+Users
+
+?
+
+Roles
+
+?
+
+Permissions
+
+?
+
+Stores
+
+?
+
+Projects
+
+?
+
+Activities

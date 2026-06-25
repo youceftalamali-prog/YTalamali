@@ -1,0 +1,105 @@
+# AuraPost AI Enterprise
+## Project Baseline Document
+
+Version: 1.0
+Status: Active
+Date: 2026-06-25
+
+---
+
+# Vision
+
+Build the world's most advanced AI-powered e-commerce operating system for Shopify, WooCommerce and global marketplaces.
+
+---
+
+# Mission
+
+Provide a complete SaaS platform capable of:
+
+- Product Import
+- Product Intelligence
+- AI Content Generation
+- AI Image Generation
+- AI Video Generation
+- Social Publishing
+- Marketplace Intelligence
+- Analytics
+- Billing
+- Automation
+
+inside one unified platform.
+
+---
+
+# Current Project Status
+
+Current completion estimate:
+
+65%
+
+The backend foundation is largely implemented.
+
+Critical production features are still missing.
+
+---
+
+# Critical Missing Components
+
+- Authentication
+- Authorization
+- API Security
+- User Management
+- Role Management
+- Workspace Isolation
+- Integration Center UI
+- AI Providers UI
+- Production Logging
+- Testing
+- Monitoring
+
+---
+
+# Development Rules
+
+1. No code without documentation.
+2. No feature without testing.
+3. No breaking changes.
+4. Every change must be committed separately.
+5. Security comes before features.
+6. Production quality over development speed.
+
+---
+
+# Phase Roadmap
+
+Phase 1
+Security Foundation
+
+Phase 2
+Platform Stabilization
+
+Phase 3
+Marketplace Intelligence
+
+Phase 4
+AI Enterprise Features
+
+Phase 5
+Production Launch
+
+---
+
+# Definition of Done
+
+A feature is considered complete only if:
+
+- Implemented
+- Tested
+- Documented
+- Reviewed
+- Production Ready
+
+---
+
+This document is the official baseline of AuraPost AI Enterprise.

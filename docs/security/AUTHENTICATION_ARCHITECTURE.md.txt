@@ -1,0 +1,328 @@
+        # AuraPost AI Enterprise
+
+# AUTHENTICATION ARCHITECTURE
+
+Version: 1.0
+
+Status: Draft
+
+Created: 2026-06-25
+
+Author: AuraPost Architecture Team
+
+---
+
+# Authentication System Overview
+
+## Purpose
+
+The authentication system protects every resource inside AuraPost AI.
+
+No user, workspace, API endpoint, AI provider, billing resource, marketplace connection or Shopify store may be accessed without successful authentication and authorization.
+
+Authentication is one of the core security pillars of the platform.
+
+---
+
+# Objectives
+
+The authentication system must provide:
+
+- Secure user registration
+- Secure login
+- Secure logout
+- Password recovery
+- Email verification
+- Session management
+- Refresh token rotation
+- Multi-device support
+- Enterprise security
+- Multi-Tenant isolation
+- Role-Based Access Control (RBAC)
+- Audit logging
+- Future MFA support
+
+---
+
+# Design Principles
+
+The authentication architecture follows these principles:
+
+1. Security First
+
+2. Zero Trust
+
+3. Least Privilege
+
+4. API First
+
+5. Stateless Access Tokens
+
+6. Secure Refresh Tokens
+
+7. Workspace Isolation
+
+8. Enterprise Scalability
+
+9. Complete Auditability
+
+10. Future Proof Design
+
+---
+
+# Authentication Components
+
+The authentication subsystem consists of:
+
+• Users
+
+• Workspaces
+
+• Roles
+
+• Permissions
+
+• Sessions
+
+• Access Tokens
+
+• Refresh Tokens
+
+• Email Verification
+
+• Password Reset
+
+• Audit Logs
+
+---
+
+# Authentication Flow
+
+User
+
+?
+
+Login
+
+?
+
+Credentials Validation
+
+?
+
+Generate Access Token
+
+?
+
+Generate Refresh Token
+
+?
+
+Create Session
+
+?
+
+Access Protected APIs
+    
+           ---
+
+# User Architecture
+
+## Overview
+
+AuraPost AI is a Multi-Tenant SaaS platform.
+
+Every authenticated user belongs to exactly one Workspace.
+
+A workspace owns all resources including stores, AI providers, billing, credits, products, analytics and automation.
+
+Users never own platform resources directly.
+
+Everything belongs to the Workspace.
+
+---
+
+# User Hierarchy
+
+Platform
+
+?
+
+Workspace
+
+?
+
+Users
+
+?
+
+Roles
+
+?
+
+Permissions
+
+?
+
+Resources
+
+---
+
+# User Types
+
+The platform supports the following user types:
+
+1. Owner
+
+The creator of the workspace.
+
+Responsibilities:
+
+- Owns the subscription
+- Owns billing
+- Can delete the workspace
+- Can invite members
+- Can remove members
+- Has unrestricted access
+
+There is only one Owner per Workspace.
+
+---
+
+2. Admin
+
+Can manage almost every workspace resource except ownership transfer.
+
+Responsibilities:
+
+- Manage users
+- Manage AI Providers
+- Manage Shopify Stores
+- Manage WooCommerce
+- Billing visibility
+- Queue Management
+- Analytics
+
+---
+
+3. Manager
+
+Operational management role.
+
+Responsibilities:
+
+- Product Management
+- Marketplace Intelligence
+- Publishing
+- AI Generation
+- Reports
+
+Cannot modify billing or ownership.
+
+---
+
+4. Editor
+
+Content production role.
+
+Responsibilities:
+
+- Product Import
+- Content Generation
+- Video Generation
+- Image Generation
+- Social Publishing
+
+Cannot manage users.
+
+---
+
+5. Viewer
+
+Read-only access.
+
+Responsibilities:
+
+- View Dashboard
+- View Analytics
+- View Products
+
+Cannot modify any resource.
+
+---
+
+# User Status
+
+Each user has one status.
+
+ACTIVE
+
+INVITED
+
+SUSPENDED
+
+LOCKED
+
+DELETED
+
+Only ACTIVE users may authenticate.
+
+---
+
+# Workspace Ownership Rules
+
+Each workspace has exactly one Owner.
+
+Ownership transfer is allowed only by the current Owner.
+
+Deleting the Owner account is prohibited.
+
+Workspace deletion automatically revokes all sessions.
+
+---
+
+# User Identity
+
+Each user contains:
+
+User ID
+
+Workspace ID
+
+Role
+
+Email
+
+Password Hash
+
+Status
+
+Created At
+
+Updated At
+
+Last Login
+
+Email Verified
+
+MFA Enabled
+
+---
+
+End of Section 2
+
+?
+
+Refresh Token Rotation
+
+?
+
+Logout
+
+?
+
+Session Revoked
+
+---
+
+End of Section 1
