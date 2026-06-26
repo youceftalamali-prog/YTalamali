@@ -667,7 +667,7 @@ function extractWooCommerceImages(html: string, productJsonLd: any | null): stri
     const jsonLdImages = Array.isArray(productJsonLd.image)
       ? productJsonLd.image.map((img: unknown) => String(img))
       : [String(productJsonLd.image)];
-    jsonLdImages.forEach((img) => addUrl(img));
+    jsonLdImages.forEach((img: string) => addUrl(img));
   }
 
   // Strategy 2: WooCommerce product gallery thumbnails (support data-src, data-lazy-src)
