@@ -559,6 +559,7 @@ All scores must be justified. Output must be valid JSON matching the exact schem
       pinterest: 10,
       x: 5,
       linkedin: 5,
+     youtube_shorts: 10, 
     };
 
     if (!result.hashtags || result.hashtags.length === 0) {
