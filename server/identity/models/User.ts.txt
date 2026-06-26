@@ -1,0 +1,53 @@
+export enum AuthProvider {
+  EMAIL = "email",
+  GOOGLE = "google",
+  GITHUB = "github",
+  FACEBOOK = "facebook",
+}
+
+export enum UserRole {
+  ADMIN = "admin",
+  USER = "user",
+  MANAGER = "manager",
+}
+
+export enum SubscriptionPlan {
+  FREE = "free",
+  PRO = "pro",
+  ENTERPRISE = "enterprise",
+}
+
+export enum UserStatus {
+  ACTIVE = "active",
+  PENDING = "pending",
+  SUSPENDED = "suspended",
+  DELETED = "deleted",
+}
+
+export interface User {
+  id: string;
+
+  firstName: string;
+  lastName: string;
+
+  email: string;
+  password?: string;
+
+  avatar?: string;
+
+  provider: AuthProvider;
+  providerId?: string;
+
+  emailVerified: boolean;
+
+  role: UserRole;
+
+  plan: SubscriptionPlan;
+
+  status: UserStatus;
+
+  createdAt: Date;
+  updatedAt: Date;
+
+  lastLoginAt?: Date;
+}
