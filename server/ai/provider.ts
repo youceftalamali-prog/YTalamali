@@ -266,7 +266,7 @@ export class AIProviderService {
     prompt: string,
     systemInstruction: string,
     schemaDescription: string,
-    config: AIProviderConfig = {},
+    config: AIRequestOptions = {},
     workspaceId?: string
   ): Promise<ProviderResponse> {
     const start = Date.now();
