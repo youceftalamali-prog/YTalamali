@@ -1107,7 +1107,13 @@ allowFallbacks?: boolean;
 modelName?: string;
 temperature?: number; 
 }  
-
+export interface AIRequestOptions {
+  preferredProvider?: AIProviderName;
+  workflow?: AIWorkflow;
+  allowFallbacks?: boolean;
+  modelName?: string;
+  temperature?: number;
+}
 /**
  * WooCommerce store connection details.
  */
