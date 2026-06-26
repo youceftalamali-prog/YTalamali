@@ -248,14 +248,21 @@ this.db.run(`  CREATE TABLE IF NOT EXISTS users (
   ); 
 ); 
 
-this.db.run(`  CREATE INDEX IF NOT EXISTS idx_users_email
-  ON users(email);`);
+this.db.run(`
+  CREATE INDEX IF NOT EXISTS idx_users_email
+  ON users(email);
+`);
 
-this.db.run(`  CREATE INDEX IF NOT EXISTS idx_users_status
-  ON users(status);`);
+this.db.run(`
+  CREATE INDEX IF NOT EXISTS idx_users_status
+  ON users(status);
+`);
 
-this.db.run(`  CREATE INDEX IF NOT EXISTS idx_users_role
-  ON users(role);`);
+this.db.run(`
+  CREATE INDEX IF NOT EXISTS idx_users_role
+  ON users(role);
+`);
+
 this.db.run(`
   CREATE INDEX IF NOT EXISTS idx_users_auth_provider
   ON users(auth_provider);
