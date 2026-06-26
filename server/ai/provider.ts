@@ -7,7 +7,7 @@ import {
   AIRequestOptions,
 } from "../../src/types.ts";
 
-export { AIProviderName };
+export type { AIProviderName };
 export type { AIProviderConfig, AIRequestOptions };
 export type AIWorkflow = "standard" | "advanced_reasoning" | "video" | "image";
 
