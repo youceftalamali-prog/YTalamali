@@ -92,7 +92,7 @@ export class AIProviderService {
     }
   }
 
-  private static resolveProviderOrder(config: AIProviderConfig): AIProviderName[] {
+  private static resolveProviderOrder(config: AIRequestOptions): AIProviderName[] {
     const workflow = config.workflow || "standard";
     const baseOrder = this.getBaseProviderOrder(workflow);
 
