@@ -223,19 +223,30 @@ export class DatabaseManager {
     this.ensureColumn("workspaces", "stripe_customer_id", "TEXT");
     
 this.db.run(`  CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-    password_hash TEXT NOT NULL,
-    name TEXT NOT NULL,
-    provider TEXT NOT NULL DEFAULT 'local',
-    role TEXT NOT NULL DEFAULT 'owner',
-    status TEXT NOT NULL DEFAULT 'active',
-    email_verified INTEGER NOT NULL DEFAULT 0,
-    last_login_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  );
-`); 
+  id TEXT PRIMARY KEY,
+
+  email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  password_hash TEXT NOT NULL,
+
+  first_name TEXT NOT NULL,
+  last_name TEXT NOT NULL,
+
+  avatar TEXT,
+
+  auth_provider TEXT NOT NULL DEFAULT 'email',
+  provider_id TEXT,
+
+  role TEXT NOT NULL DEFAULT 'owner',
+  status TEXT NOT NULL DEFAULT 'active',
+
+  email_verified INTEGER NOT NULL DEFAULT 0,
+
+  last_login_at TEXT,
+
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+  ); 
+); 
 
 this.db.run(`  CREATE INDEX IF NOT EXISTS idx_users_email
   ON users(email);`);
@@ -245,7 +256,20 @@ this.db.run(`  CREATE INDEX IF NOT EXISTS idx_users_status
 
 this.db.run(`  CREATE INDEX IF NOT EXISTS idx_users_role
   ON users(role);`);
+this.db.run(`
+  CREATE INDEX IF NOT EXISTS idx_users_auth_provider
+  ON users(auth_provider);
+`);
 
+this.db.run(`
+  CREATE INDEX IF NOT EXISTS idx_users_provider_id
+  ON users(provider_id);
+`);
+
+this.db.run(`
+  CREATE INDEX IF NOT EXISTS idx_users_auth_provider_provider_id
+  ON users(auth_provider, provider_id);
+`);
     this.db.run(`
       CREATE TABLE IF NOT EXISTS billing_subscriptions (
         id TEXT PRIMARY KEY,
