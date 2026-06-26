@@ -1,9 +1,14 @@
 import { GoogleGenAI } from "@google/genai";
 import { OpenAI } from "openai";
 import { DatabaseManager } from "../db.ts";
-import { AIProviderName, AIProviderConfig } from "../../src/types.ts";
+import {
+  AIProviderName,
+  AIProviderConfig,
+  AIRequestOptions,
+} from "../../src/types.ts";
 
-export { AIProviderName, AIProviderConfig };
+export { AIProviderName };
+export type { AIProviderConfig, AIRequestOptions };
 export type AIWorkflow = "standard" | "advanced_reasoning" | "video" | "image";
 
 export interface ProviderResponse {
