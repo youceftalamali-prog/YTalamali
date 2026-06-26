@@ -822,7 +822,7 @@ export class AliExpressExtractor extends BaseExtractor {
 
     const payload = parseJsonpPayload<{ data?: { result?: unknown } }>(await response.text());
     const result = payload?.data?.result;
-    if (!result || payload?.ret?.some((entry: string) => /FAIL|ERROR/i.test(entry))) {
+   if (!result) {
       throw new Error(`AliExpress API response missing product data for ${url}.`);
     }
 
