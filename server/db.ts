@@ -4517,4 +4517,7 @@ this.db.run("CREATE INDEX IF NOT EXISTS idx_users_auth_provider_provider_id ON u
     this.db.run("DELETE FROM oauth_states WHERE state = $state", { $state: state });
     this.saveToDisk();
   }
+  public getDatabase() {
+  return this.db;
+}
 }
