@@ -11,12 +11,6 @@ export enum UserRole {
   MANAGER = "manager",
 }
 
-export enum SubscriptionPlan {
-  FREE = "free",
-  PRO = "pro",
-  ENTERPRISE = "enterprise",
-}
-
 export enum UserStatus {
   ACTIVE = "active",
   PENDING = "pending",
@@ -31,19 +25,16 @@ export interface User {
   lastName: string;
 
   email: string;
-  password?: string;
+  passwordHash: string;
 
   avatar?: string;
 
-  provider: AuthProvider;
+  authProvider: AuthProvider;
   providerId?: string;
 
   emailVerified: boolean;
 
   role: UserRole;
-
-  plan: SubscriptionPlan;
-
   status: UserStatus;
 
   createdAt: Date;
