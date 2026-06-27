@@ -5,12 +5,6 @@ export enum AuthProvider {
   FACEBOOK = "facebook",
 }
 
-export enum UserRole {
-  ADMIN = "admin",
-  USER = "user",
-  MANAGER = "manager",
-}
-
 export enum UserStatus {
   ACTIVE = "active",
   PENDING = "pending",
@@ -34,7 +28,7 @@ export interface User {
 
   emailVerified: boolean;
 
-  role: UserRole;
+  role: string;
   status: UserStatus;
 
   createdAt: Date;
