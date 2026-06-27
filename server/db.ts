@@ -274,9 +274,8 @@ this.db.run("CREATE INDEX IF NOT EXISTS idx_users_auth_provider_provider_id ON u
         canceled_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
-     );
-     `);
-
+    );
+  `);
     this.db.run(`
       CREATE TABLE IF NOT EXISTS workspace_credit_pools (
         workspace_id TEXT NOT NULL,
